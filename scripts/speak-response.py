@@ -401,7 +401,9 @@ def main():
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True)
         return
-    proc = subprocess.Popen(["/usr/bin/say", spoken],
+    # Name-prefixed on every path — immediate, drainer, /spoken-recap — so a
+    # summary is always attributable to a terminal, contention or not.
+    proc = subprocess.Popen(["/usr/bin/say", f"{entry['name']}: {spoken}"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
     try:
