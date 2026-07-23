@@ -38,6 +38,12 @@ Nothing to do — responses just speak. Control it with two slash commands:
 - Voice busy → the session waits for the current speech to end, plays a soft **chime**, and queues its summary.
 - `/spoken-recap` in any terminal replays that session's queued summaries, each prefixed with its project name — you set the pacing.
 
+## On a call? It stays quiet
+
+If your **microphone or camera is actively in use** — a Zoom/Teams/FaceTime call, a Meet tab, a screen recording — the hook says nothing at all (not even the chime) and just queues the summary. Run `/spoken-recap` after the call to hear what you missed.
+
+Detection uses a tiny compiled helper (`scripts/av-status.c`, built by the installer) that reads the same CoreAudio/CoreMediaIO signals behind the orange and green menu-bar dots, so it works for any app, including browser-tab calls. It needs no mic/camera permissions and never touches the devices itself. If the helper isn't built (no Xcode Command Line Tools), speech simply always plays.
+
 ## How it works
 
 ```
@@ -45,6 +51,7 @@ response finishes ──▶ Stop hook (speak-response.py)
                         │  reads last assistant message from the transcript
                         │  prefers the 🔊-marked summary line, else sanitizes + caps
                         │  logs to ~/.claude/tts-queue.jsonl
+                        ├─ mic/camera in use ──▶ full silence + queue for /spoken-recap
                         ├─ voice idle ──▶ /usr/bin/say  (on-device Apple TTS)
                         └─ voice busy ──▶ deferred chime + queue for /spoken-recap
 ```
@@ -60,6 +67,7 @@ State lives in `~/.claude/tts-state.json` (global mode) and `~/.claude/tts-sessi
 
 ```bash
 rm ~/.claude/scripts/speak-response.py ~/.claude/scripts/tts-recap.py \
+   ~/.claude/scripts/av-status \
    ~/.claude/commands/tts.md ~/.claude/commands/spoken-recap.md \
    ~/.claude/tts-state.json ~/.claude/tts-queue.jsonl
 rm -rf ~/.claude/tts-sessions

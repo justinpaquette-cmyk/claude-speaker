@@ -16,6 +16,19 @@ chmod +x ~/.claude/scripts/speak-response.py ~/.claude/scripts/tts-recap.py
 cp "$REPO_DIR/commands/tts.md" "$REPO_DIR/commands/spoken-recap.md" ~/.claude/commands/
 echo "Installed scripts to ~/.claude/scripts and commands to ~/.claude/commands"
 
+# Build the mic/camera detector (call suppression). Optional: without it,
+# speech simply always plays.
+if command -v cc >/dev/null 2>&1; then
+  if cc -O2 -o ~/.claude/scripts/av-status "$REPO_DIR/scripts/av-status.c" \
+       -framework CoreAudio -framework CoreMediaIO -framework CoreFoundation; then
+    echo "Built ~/.claude/scripts/av-status (speech pauses while mic/camera are in use)"
+  else
+    echo "WARNING: av-status failed to build — speech will play even during calls" >&2
+  fi
+else
+  echo "WARNING: no C compiler (install Xcode Command Line Tools) — speech will play even during calls" >&2
+fi
+
 # Register the Stop hook in ~/.claude/settings.json (merge, never clobber).
 python3 - <<'PY'
 import json, os

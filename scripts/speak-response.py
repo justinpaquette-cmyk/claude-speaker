@@ -13,8 +13,10 @@ Toggled by the /tts skill.
 Delivery: every summary is appended to ~/.claude/tts-queue.jsonl. If nothing
 is currently speaking, it plays immediately (spoken: true); if another
 session is talking, a chime plays instead and the entry waits (spoken:
-false) for /spoken-recap (scripts/tts-recap.py). Always exits 0 — TTS must
-never block the session.
+false) for /spoken-recap (scripts/tts-recap.py). If the mic or camera is
+live (a call, a recording — checked via the compiled av-status helper),
+nothing plays at all, not even the chime; the entry just queues. Always
+exits 0 — TTS must never block the session.
 """
 import json
 import os
@@ -28,6 +30,7 @@ PID_FILE = os.path.join(CLAUDE_DIR, "scripts", ".speak-response.pid")
 STATE_FILE = os.path.join(CLAUDE_DIR, "tts-state.json")
 SESSION_DIR = os.path.join(CLAUDE_DIR, "tts-sessions")
 QUEUE_FILE = os.path.join(CLAUDE_DIR, "tts-queue.jsonl")
+AV_HELPER = os.path.join(CLAUDE_DIR, "scripts", "av-status")
 FALLBACK_CHAR_CAP = 600
 MARKER = "🔊"
 MODES = ("off", "summary", "full")
@@ -103,6 +106,24 @@ def pick_speech(text, mode):
     return spoken
 
 
+def on_call():
+    """True if the mic or camera is actively in use (call, recording).
+
+    Asks the compiled av-status helper (scripts/av-status.c) — the same
+    signals as the orange/green menu-bar dots, so it covers Zoom, Teams,
+    FaceTime, and browser-tab calls alike. Missing helper or any failure
+    means "not on a call": speech must degrade to normal, never to silence.
+    """
+    if not os.access(AV_HELPER, os.X_OK):
+        return False
+    try:
+        out = subprocess.run([AV_HELPER], capture_output=True, text=True,
+                             timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "mic=1" in out or "cam=1" in out
+
+
 def active_say_pid():
     """Pid of the currently speaking `say`, or None if the voice is idle."""
     try:
@@ -150,6 +171,14 @@ def main():
     if not spoken:
         return
     project = os.path.basename(payload.get("cwd") or "") or "unknown"
+    if on_call():
+        # Mic or camera is live — Justin is probably on a call. Total
+        # silence (even the chime would bleed into a meeting); the summary
+        # waits in the queue for /spoken-recap.
+        enqueue({"ts": int(time.time()), "project": project,
+                 "session": session_id, "text": spoken, "spoken": False,
+                 "held": "call"})
+        return
     busy_pid = active_say_pid()
     enqueue({"ts": int(time.time()), "project": project,
              "session": session_id, "text": spoken, "spoken": busy_pid is None})
