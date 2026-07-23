@@ -11,7 +11,7 @@ If you run several Claude Code sessions in parallel, you stop watching them all.
 ## Install
 
 ```bash
-git clone <this-repo-url> && cd claude-speaker && ./install.sh
+git clone https://github.com/justinpaquette-cmyk/claude-speaker.git && cd claude-speaker && ./install.sh
 ```
 
 Then restart your Claude Code sessions (or open `/hooks` once in each running one). That's it — the next response you get will end with a spoken summary.
