@@ -7,10 +7,13 @@ Modes (per-session override > global default > "summary"):
             either way trimmed to the resolved summary length (see below)
   full    - speak the entire sanitized response, uncapped (🔊 marker line dropped)
 
-Summary length: the summary is trimmed to a configurable character cap
-(per-session override > global "summary_chars" > DEFAULT_SUMMARY_CAP). Set
-via `/tts length <n>`. Applies to both the authored 🔊 line and the fallback;
-`full` mode ignores it.
+Summary length: the summary is trimmed to a character cap. By default the
+cap is ADAPTIVE — proportional to the turn's sanitized output volume:
+clamp(chars * SUMMARY_RATIO, SUMMARY_FLOOR, SUMMARY_CEILING) — so a big
+multi-step turn earns a longer spoken summary and a one-liner stays short.
+An explicit `/tts length <n>` (per-session > global "summary_chars") overrides
+the formula with a flat cap. Applies to both the authored 🔊 line and the
+fallback; `full` mode ignores it.
 
 State: global mode in ~/.claude/tts-state.json {"mode": "summary"};
 per-session overrides in ~/.claude/tts-sessions/<session_id>.json.
@@ -51,7 +54,11 @@ SESSION_DIR = os.path.join(CLAUDE_DIR, "tts-sessions")
 QUEUE_FILE = os.path.join(CLAUDE_DIR, "tts-queue.jsonl")
 AV_HELPER = os.path.join(CLAUDE_DIR, "scripts", "av-status")
 DRAIN_LOCK = os.path.join(CLAUDE_DIR, "scripts", ".tts-drain.lock")
-DEFAULT_SUMMARY_CAP = 1200  # summary-length default; override via /tts length
+# Adaptive summary cap: proportional to the turn's sanitized volume, clamped.
+# An explicit /tts length (summary_chars) overrides this with a flat cap.
+SUMMARY_RATIO = 0.5
+SUMMARY_FLOOR = 400
+SUMMARY_CEILING = 2500
 MARKER = "🔊"
 MODES = ("off", "summary", "full")
 COLLISIONS = ("chime", "follow")
@@ -85,11 +92,12 @@ def resolve_collision(session_id):
     return resolve_setting(session_id, "collision", COLLISIONS, "chime")
 
 
-def resolve_summary_cap(session_id):
-    """Summary length cap: per-session "summary_chars" > global > default.
+def explicit_summary_cap(session_id):
+    """Explicit flat cap from /tts length: per-session "summary_chars" > global.
 
-    A positive number; anything else (missing, zero, non-numeric) is ignored
-    and the search falls through to the next source, then the default.
+    A positive number; anything else (missing, zero, non-numeric, bool) is
+    ignored and the search falls through. None means "no explicit cap set" —
+    the caller then falls back to the adaptive proportional cap.
     """
     paths = []
     if session_id:
@@ -103,7 +111,18 @@ def resolve_summary_cap(session_id):
             continue
         if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
             return int(val)
-    return DEFAULT_SUMMARY_CAP
+    return None
+
+
+def adaptive_cap(text):
+    """Summary cap proportional to the turn's sanitized (spoken) volume."""
+    volume = len(sanitize(text))
+    return int(min(SUMMARY_CEILING, max(SUMMARY_FLOOR, volume * SUMMARY_RATIO)))
+
+
+def resolve_summary_cap(session_id, text):
+    """Explicit /tts length cap if set, else the adaptive proportional cap."""
+    return explicit_summary_cap(session_id) or adaptive_cap(text)
 
 
 def last_assistant_text(transcript_path):
@@ -207,7 +226,7 @@ def _trim(spoken, cap):
     return (cut[:sp] if sp > 0 else cut) + " — full response is in the terminal."
 
 
-def pick_speech(text, mode, cap=DEFAULT_SUMMARY_CAP):
+def pick_speech(text, mode, cap):
     lines = text.splitlines()
     marker_line = next((ln.strip() for ln in reversed(lines)
                         if ln.strip().startswith(MARKER)), None)
@@ -394,7 +413,7 @@ def main():
     text = fresh_assistant_text(transcript, session_id)
     if not text:
         return
-    spoken = pick_speech(text, mode, resolve_summary_cap(session_id))
+    spoken = pick_speech(text, mode, resolve_summary_cap(session_id, text))
     if not spoken:
         return
     project = os.path.basename(payload.get("cwd") or "") or "unknown"

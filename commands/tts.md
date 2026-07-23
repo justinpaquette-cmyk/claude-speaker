@@ -8,8 +8,12 @@ Control the Stop-hook TTS (`~/.claude/scripts/speak-response.py`). Two settings:
 - `full` — speak the entire sanitized response (uncapped)
 
 **Length** — summary character cap (`summary` mode only; `full` is uncapped):
-- a positive integer; default `1200`. The 🔊 line (or fallback) is trimmed to
-  this at a word boundary with a spoken "full response is in the terminal" tail.
+- **Default is adaptive**: proportional to the turn's sanitized output volume
+  (`chars × 0.5`, clamped to `400–2500`) — a big turn earns a longer spoken
+  summary, a one-liner stays short.
+- `/tts length <n>` overrides the formula with a flat cap (positive integer).
+  The 🔊 line (or fallback) is trimmed at a word boundary with a spoken
+  "full response is in the terminal" tail.
 
 **Collision** — what happens when another session's voice is already talking:
 - `chime` — soft chime after the current speech; summary queues for `/spoken-recap` (default)
@@ -45,7 +49,7 @@ No argument = report current state.
 
    **Write by merging, never clobbering:** read the target file's existing JSON (absent/invalid = `{}`), set just the one key (`"mode"` or `"collision"`), write it back. Both keys live in the same files.
 
-4. Report state: from `~/.claude/tts-state.json` the global `mode` (absent = `summary`), `collision` (absent = `chime`), and `summary_chars` (absent = `1200`), plus this session's overrides from `~/.claude/tts-sessions/<session_id>.json` (absent = follows global), e.g. "TTS: this session = full (override), global default = summary, length = 1200, collision = follow (global)".
+4. Report state: from `~/.claude/tts-state.json` the global `mode` (absent = `summary`), `collision` (absent = `chime`), and `summary_chars` (absent = `adaptive`), plus this session's overrides from `~/.claude/tts-sessions/<session_id>.json` (absent = follows global), e.g. "TTS: this session = full (override), global default = summary, length = adaptive, collision = follow (global)".
 
 5. If mode is `off` for this session, stop ending responses with the 🔊 line until it's turned back on. If `full`, the 🔊 line is unnecessary — drop it (the hook strips it anyway).
 
