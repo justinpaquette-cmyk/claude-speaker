@@ -30,7 +30,9 @@ Nothing to do — responses just speak. Control it with two slash commands:
 | `/tts <mode> global` | Set the default for all sessions |
 | `/tts collision follow` | This session's summaries auto-read right after the current speech |
 | `/tts collision chime [global]` | Back to chime-and-queue (default) |
-| `/tts name <spoken name>` | What the voice calls this project (default: folder name, camelCase split into words) |
+| `/tts name <spoken name>` | Fallback spoken name for this project's terminals |
+
+**What the voice calls a terminal:** its session title — set one with Claude Code's built-in `/rename` (auto titles work too) — else the `/tts name` custom name, else the project folder name. Titles and folder names are humanized for speech (camelCase/dashes split into words).
 | `/spoken-recap` | Replay this session's queued summaries |
 | `/spoken-recap status` | List this session's queue without speaking |
 | `/spoken-recap all` | Replay queued summaries from every session |

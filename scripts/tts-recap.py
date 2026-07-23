@@ -95,7 +95,7 @@ def main():
             print("queue empty")
             return
         e = mine[-1]
-        speak(f"{speak_name(e.get('project'))}: {e.get('text')}")
+        speak(f"{e.get('name') or speak_name(e.get('project'))}: {e.get('text')}")
         e["spoken"] = True
         save_queue(entries)
         print(f"replaying latest: [{e.get('project')}] {e.get('text')}")
@@ -104,7 +104,8 @@ def main():
     if not unplayed:
         print("nothing queued — you're caught up")
         return
-    chunks = [f"{speak_name(e.get('project'))}: {e.get('text')}" for e in unplayed]
+    chunks = [f"{e.get('name') or speak_name(e.get('project'))}: {e.get('text')}"
+              for e in unplayed]
     speak(" ... Next. ".join(chunks))
     for e in unplayed:
         e["spoken"] = True

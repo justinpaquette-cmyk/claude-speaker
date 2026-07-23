@@ -24,7 +24,9 @@ No argument = report current state.
 
 1. Parse the arguments. `collision` as the first word means the setting is `collision` (valid values: `chime`, `follow`); `name` as the first word means everything after it is the spoken name for this project; otherwise the setting is `mode` (valid values: `off`, `summary`, `full`). If no valid argument, skip to step 4 (report only).
 
-   **`name`:** merge into `~/.claude/tts-state.json` (always global) a `"names"` map entry keyed by the basename of the current working directory, value = the given spoken name, e.g. `{"names": {"retoolBot": "the retool terminal"}}`. Read-modify-write, preserving all other keys. Then report and stop. Without a custom name, the voice speaks the folder name with camelCase/dashes split into words.
+   **`name`:** merge into `~/.claude/tts-state.json` (always global) a `"names"` map entry keyed by the basename of the current working directory, value = the given spoken name, e.g. `{"names": {"retoolBot": "the retool terminal"}}`. Read-modify-write, preserving all other keys. Then report and stop.
+
+   Note the announce-name precedence: the session's title (Claude Code's `/rename`, or its auto title) wins over this map, which wins over the humanized folder name. To rename ONE terminal, `/rename` is usually what you want; `/tts name` sets the fallback for all terminals in this project folder.
 
 2. **Global scope** (`global` present): target file is `~/.claude/tts-state.json`.
 

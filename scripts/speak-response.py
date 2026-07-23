@@ -229,6 +229,12 @@ def enqueue(entry):
         pass
 
 
+def humanize(name):
+    """camelCase/dashes/underscores → speakable words."""
+    name = re.sub(r"[-_]+", " ", name)
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
+
+
 def speak_name(project):
     """Spoken form of a project name: custom name from the global state
     file's "names" map if set, else camelCase/dashes split into words."""
@@ -239,8 +245,31 @@ def speak_name(project):
             return names[project]
     except (OSError, ValueError):
         pass
-    name = re.sub(r"[-_]+", " ", project)
-    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
+    return humanize(project)
+
+
+def session_name(session_id):
+    """The session's title — /rename or Claude Code's auto title — from the
+    live registry (~/.claude/sessions/<pid>.json), newest entry wins."""
+    sess_dir = os.path.expanduser("~/.claude/sessions")
+    best, best_ts = None, -1
+    try:
+        files = os.listdir(sess_dir)
+    except OSError:
+        return None
+    for fn in files:
+        if not fn.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(sess_dir, fn)) as f:
+                info = json.load(f)
+        except (OSError, ValueError):
+            continue
+        name = (info.get("name") or "").strip()
+        ts = info.get("updatedAt") or 0
+        if info.get("sessionId") == session_id and name and ts > best_ts:
+            best, best_ts = name, ts
+    return best
 
 
 def spawn_drainer():
@@ -304,9 +333,9 @@ def drain():
             os.replace(tmp, QUEUE_FILE)
         except OSError:
             return
+        prefix = entry.get("name") or speak_name(entry.get("project") or "")
         proc = subprocess.Popen(
-            ["/usr/bin/say",
-             f"{speak_name(entry.get('project') or '')}: {entry.get('text')}"],
+            ["/usr/bin/say", f"{prefix}: {entry.get('text')}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True)
         try:
@@ -347,8 +376,12 @@ def main():
         return
     busy_pid = active_say_pid()
     collision = resolve_collision(session_id)
+    # Resolve the announce-name now, while the session registry entry is
+    # alive: /rename (or auto) session title > /tts names map > folder name.
+    title = session_name(session_id)
     entry = {"ts": int(time.time()), "project": project,
-             "session": session_id, "text": spoken, "spoken": busy_pid is None}
+             "session": session_id, "text": spoken, "spoken": busy_pid is None,
+             "name": humanize(title) if title else speak_name(project)}
     if collision == "follow":
         entry["follow"] = True
     enqueue(entry)
