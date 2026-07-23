@@ -3,8 +3,14 @@
 
 Modes (per-session override > global default > "summary"):
   off     - stay silent
-  summary - speak the final line marked with 🔊, else a sanitized capped fallback
-  full    - speak the entire sanitized response (🔊 marker line dropped)
+  summary - speak the final line(s) marked with 🔊, else a sanitized fallback;
+            either way trimmed to the resolved summary length (see below)
+  full    - speak the entire sanitized response, uncapped (🔊 marker line dropped)
+
+Summary length: the summary is trimmed to a configurable character cap
+(per-session override > global "summary_chars" > DEFAULT_SUMMARY_CAP). Set
+via `/tts length <n>`. Applies to both the authored 🔊 line and the fallback;
+`full` mode ignores it.
 
 State: global mode in ~/.claude/tts-state.json {"mode": "summary"};
 per-session overrides in ~/.claude/tts-sessions/<session_id>.json.
@@ -45,7 +51,7 @@ SESSION_DIR = os.path.join(CLAUDE_DIR, "tts-sessions")
 QUEUE_FILE = os.path.join(CLAUDE_DIR, "tts-queue.jsonl")
 AV_HELPER = os.path.join(CLAUDE_DIR, "scripts", "av-status")
 DRAIN_LOCK = os.path.join(CLAUDE_DIR, "scripts", ".tts-drain.lock")
-FALLBACK_CHAR_CAP = 600
+DEFAULT_SUMMARY_CAP = 1200  # summary-length default; override via /tts length
 MARKER = "🔊"
 MODES = ("off", "summary", "full")
 COLLISIONS = ("chime", "follow")
@@ -77,6 +83,27 @@ def resolve_mode(session_id):
 
 def resolve_collision(session_id):
     return resolve_setting(session_id, "collision", COLLISIONS, "chime")
+
+
+def resolve_summary_cap(session_id):
+    """Summary length cap: per-session "summary_chars" > global > default.
+
+    A positive number; anything else (missing, zero, non-numeric) is ignored
+    and the search falls through to the next source, then the default.
+    """
+    paths = []
+    if session_id:
+        paths.append(os.path.join(SESSION_DIR, f"{session_id}.json"))
+    paths.append(STATE_FILE)
+    for path in paths:
+        try:
+            with open(path) as f:
+                val = json.load(f).get("summary_chars")
+        except (OSError, ValueError):
+            continue
+        if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
+            return int(val)
+    return DEFAULT_SUMMARY_CAP
 
 
 def last_assistant_text(transcript_path):
@@ -171,20 +198,25 @@ def sanitize(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def pick_speech(text, mode):
+def _trim(spoken, cap):
+    """Trim to `cap` chars at a word boundary, with a spoken 'see terminal' tail."""
+    if not cap or len(spoken) <= cap:
+        return spoken
+    cut = spoken[:cap]
+    sp = cut.rfind(" ")
+    return (cut[:sp] if sp > 0 else cut) + " — full response is in the terminal."
+
+
+def pick_speech(text, mode, cap=DEFAULT_SUMMARY_CAP):
     lines = text.splitlines()
     marker_line = next((ln.strip() for ln in reversed(lines)
                         if ln.strip().startswith(MARKER)), None)
     if mode == "full":
         body = "\n".join(ln for ln in lines if not ln.strip().startswith(MARKER))
-        return sanitize(body)
+        return sanitize(body)  # full is deliberately uncapped
     if marker_line:
-        return sanitize(marker_line[len(MARKER):])
-    spoken = sanitize(text)
-    if len(spoken) > FALLBACK_CHAR_CAP:
-        cut = spoken[:FALLBACK_CHAR_CAP]
-        spoken = cut[:cut.rfind(" ")] + " — full response is in the terminal."
-    return spoken
+        return _trim(sanitize(marker_line[len(MARKER):]), cap)
+    return _trim(sanitize(text), cap)
 
 
 def on_call():
@@ -362,7 +394,7 @@ def main():
     text = fresh_assistant_text(transcript, session_id)
     if not text:
         return
-    spoken = pick_speech(text, mode)
+    spoken = pick_speech(text, mode, resolve_summary_cap(session_id))
     if not spoken:
         return
     project = os.path.basename(payload.get("cwd") or "") or "unknown"

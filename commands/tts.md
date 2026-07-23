@@ -4,8 +4,12 @@ Control the Stop-hook TTS (`~/.claude/scripts/speak-response.py`). Two settings:
 
 **Mode** — what gets spoken:
 - `off` — silent
-- `summary` — speak only the final 🔊 line (default)
-- `full` — speak the entire sanitized response
+- `summary` — speak only the final 🔊 line, trimmed to the summary length (default)
+- `full` — speak the entire sanitized response (uncapped)
+
+**Length** — summary character cap (`summary` mode only; `full` is uncapped):
+- a positive integer; default `1200`. The 🔊 line (or fallback) is trimmed to
+  this at a word boundary with a spoken "full response is in the terminal" tail.
 
 **Collision** — what happens when another session's voice is already talking:
 - `chime` — soft chime after the current speech; summary queues for `/spoken-recap` (default)
@@ -16,13 +20,16 @@ Scope: **this session** by default; add `global` to set the default for all sess
 ## Usage
 
 `/tts <off|summary|full> [global]` — set the mode.
+`/tts length <n> [global]` — set the summary character cap (e.g. `/tts length 2000`).
 `/tts collision <chime|follow> [global]` — set the collision policy.
 `/tts name <spoken name>` — how the voice announces THIS project (e.g. `/tts name the docs terminal`).
 No argument = report current state.
 
 ## Steps
 
-1. Parse the arguments. `collision` as the first word means the setting is `collision` (valid values: `chime`, `follow`); `name` as the first word means everything after it is the spoken name for this project; otherwise the setting is `mode` (valid values: `off`, `summary`, `full`). If no valid argument, skip to step 4 (report only).
+1. Parse the arguments. `collision` as the first word means the setting is `collision` (valid values: `chime`, `follow`); `length` as the first word means the setting is `summary_chars` (value = the following positive integer); `name` as the first word means everything after it is the spoken name for this project; otherwise the setting is `mode` (valid values: `off`, `summary`, `full`). If no valid argument, skip to step 4 (report only).
+
+   **`length`:** write the integer under the key `"summary_chars"` (not `"length"`) into the target file per the scope rules below (session by default, `global` for all sessions). Read-modify-write, preserving other keys.
 
    **`name`:** merge into `~/.claude/tts-state.json` (always global) a `"names"` map entry keyed by the basename of the current working directory, value = the given spoken name, e.g. `{"names": {"retoolBot": "the retool terminal"}}`. Read-modify-write, preserving all other keys. Then report and stop.
 
@@ -38,7 +45,7 @@ No argument = report current state.
 
    **Write by merging, never clobbering:** read the target file's existing JSON (absent/invalid = `{}`), set just the one key (`"mode"` or `"collision"`), write it back. Both keys live in the same files.
 
-4. Report state: from `~/.claude/tts-state.json` the global `mode` (absent = `summary`) and `collision` (absent = `chime`), plus this session's overrides from `~/.claude/tts-sessions/<session_id>.json` (absent = follows global), e.g. "TTS: this session = full (override), global default = summary, collision = follow (global)".
+4. Report state: from `~/.claude/tts-state.json` the global `mode` (absent = `summary`), `collision` (absent = `chime`), and `summary_chars` (absent = `1200`), plus this session's overrides from `~/.claude/tts-sessions/<session_id>.json` (absent = follows global), e.g. "TTS: this session = full (override), global default = summary, length = 1200, collision = follow (global)".
 
 5. If mode is `off` for this session, stop ending responses with the 🔊 line until it's turned back on. If `full`, the 🔊 line is unnecessary — drop it (the hook strips it anyway).
 
