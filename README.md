@@ -28,6 +28,9 @@ Nothing to do — responses just speak. Control it with two slash commands:
 | `/tts summary` | Default: speak only the final 🔊 summary line |
 | `/tts full` | Speak the entire response (markdown/code sanitized out) |
 | `/tts <mode> global` | Set the default for all sessions |
+| `/tts collision follow` | This session's summaries auto-read right after the current speech |
+| `/tts collision chime [global]` | Back to chime-and-queue (default) |
+| `/tts name <spoken name>` | What the voice calls this project (default: folder name, camelCase split into words) |
 | `/spoken-recap` | Replay this session's queued summaries |
 | `/spoken-recap status` | List this session's queue without speaking |
 | `/spoken-recap all` | Replay queued summaries from every session |
@@ -35,8 +38,12 @@ Nothing to do — responses just speak. Control it with two slash commands:
 ## How multi-session collisions work
 
 - Voice idle → a finishing session **speaks immediately**.
-- Voice busy → the session waits for the current speech to end, plays a soft **chime**, and queues its summary.
-- `/spoken-recap` in any terminal replays that session's queued summaries, each prefixed with its project name — you set the pacing.
+- Voice busy → the **collision setting** decides, per session (override) or globally:
+  - **`chime`** (default) — wait for the current speech to end, play a soft **chime**, and queue the summary for `/spoken-recap`. You set the pacing.
+  - **`follow`** — queue the summary and **speak it automatically right after** the current speech (and any earlier queued summaries) finishes, prefixed with its project name. Sessions read out in finish order, serialized — never over each other.
+- `/tts collision <chime|follow> [global]` switches between them; `/spoken-recap` in any terminal replays a session's queued summaries either way.
+
+Follow mode only auto-reads summaries queued by follow-mode sessions in the last 5 minutes — older backlog and summaries held during a call never replay on their own; they wait for `/spoken-recap`.
 
 ## On a call? It stays quiet
 

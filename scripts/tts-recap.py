@@ -12,6 +12,7 @@ the newest 200 entries on every run.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -54,6 +55,20 @@ def save_queue(entries):
     os.replace(tmp, QUEUE_FILE)
 
 
+def speak_name(project):
+    """Spoken form of a project name: custom name from tts-state.json's
+    "names" map if set, else camelCase/dashes split into words."""
+    try:
+        with open(os.path.expanduser("~/.claude/tts-state.json")) as f:
+            names = json.load(f).get("names") or {}
+        if project in names:
+            return names[project]
+    except (OSError, ValueError):
+        pass
+    name = re.sub(r"[-_]+", " ", project or "")
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
+
+
 def speak(text):
     proc = subprocess.Popen(["/usr/bin/say", text],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -80,7 +95,7 @@ def main():
             print("queue empty")
             return
         e = mine[-1]
-        speak(f"{e.get('project')}: {e.get('text')}")
+        speak(f"{speak_name(e.get('project'))}: {e.get('text')}")
         e["spoken"] = True
         save_queue(entries)
         print(f"replaying latest: [{e.get('project')}] {e.get('text')}")
@@ -89,7 +104,7 @@ def main():
     if not unplayed:
         print("nothing queued — you're caught up")
         return
-    chunks = [f"{e.get('project')}: {e.get('text')}" for e in unplayed]
+    chunks = [f"{speak_name(e.get('project'))}: {e.get('text')}" for e in unplayed]
     speak(" ... Next. ".join(chunks))
     for e in unplayed:
         e["spoken"] = True

@@ -11,9 +11,15 @@ per-session overrides in ~/.claude/tts-sessions/<session_id>.json.
 Toggled by the /tts skill.
 
 Delivery: every summary is appended to ~/.claude/tts-queue.jsonl. If nothing
-is currently speaking, it plays immediately (spoken: true); if another
-session is talking, a chime plays instead and the entry waits (spoken:
-false) for /spoken-recap (scripts/tts-recap.py). If the mic or camera is
+is currently speaking, it plays immediately (spoken: true). If another
+session is talking, the "collision" setting (per-session override > global
+> "chime") decides:
+  chime  - a chime plays after the current speech and the entry waits
+           (spoken: false) for /spoken-recap (scripts/tts-recap.py)
+  follow - the entry waits its turn and is spoken automatically right
+           after the current speech ends (a locked drainer subprocess,
+           `speak-response.py --drain`, serializes the readout)
+If the mic or camera is
 live (a call, a recording — checked via the compiled av-status helper),
 nothing plays at all, not even the chime; the entry just queues. Always
 exits 0 — TTS must never block the session.
@@ -23,6 +29,7 @@ flush, so it fingerprints the last-handled message per session
 (~/.claude/tts-sessions/<session_id>.seen) and waits for the transcript
 to move past it — otherwise it would speak the previous turn.
 """
+import fcntl
 import hashlib
 import json
 import os
@@ -37,27 +44,39 @@ STATE_FILE = os.path.join(CLAUDE_DIR, "tts-state.json")
 SESSION_DIR = os.path.join(CLAUDE_DIR, "tts-sessions")
 QUEUE_FILE = os.path.join(CLAUDE_DIR, "tts-queue.jsonl")
 AV_HELPER = os.path.join(CLAUDE_DIR, "scripts", "av-status")
+DRAIN_LOCK = os.path.join(CLAUDE_DIR, "scripts", ".tts-drain.lock")
 FALLBACK_CHAR_CAP = 600
 MARKER = "🔊"
 MODES = ("off", "summary", "full")
+COLLISIONS = ("chime", "follow")
 FRESH_WAIT_SECS = 8  # must stay under the hook timeout in settings.json
+FOLLOW_WINDOW_SECS = 300  # drainer ignores entries older than this
 
 
-def read_mode(path):
+def read_setting(path, key, valid):
     try:
         with open(path) as f:
-            mode = (json.load(f).get("mode") or "").strip()
-        return mode if mode in MODES else None
+            val = (json.load(f).get(key) or "").strip()
+        return val if val in valid else None
     except (OSError, ValueError):
         return None
 
 
-def resolve_mode(session_id):
+def resolve_setting(session_id, key, valid, default):
     if session_id:
-        mode = read_mode(os.path.join(SESSION_DIR, f"{session_id}.json"))
-        if mode:
-            return mode
-    return read_mode(STATE_FILE) or "summary"
+        val = read_setting(os.path.join(SESSION_DIR, f"{session_id}.json"),
+                           key, valid)
+        if val:
+            return val
+    return read_setting(STATE_FILE, key, valid) or default
+
+
+def resolve_mode(session_id):
+    return resolve_setting(session_id, "mode", MODES, "summary")
+
+
+def resolve_collision(session_id):
+    return resolve_setting(session_id, "collision", COLLISIONS, "chime")
 
 
 def last_assistant_text(transcript_path):
@@ -210,6 +229,94 @@ def enqueue(entry):
         pass
 
 
+def speak_name(project):
+    """Spoken form of a project name: custom name from the global state
+    file's "names" map if set, else camelCase/dashes split into words."""
+    try:
+        with open(STATE_FILE) as f:
+            names = json.load(f).get("names") or {}
+        if project in names:
+            return names[project]
+    except (OSError, ValueError):
+        pass
+    name = re.sub(r"[-_]+", " ", project)
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
+
+
+def spawn_drainer():
+    subprocess.Popen([sys.executable, os.path.abspath(__file__), "--drain"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+
+
+def drain():
+    """Speak queued entries in order, one per voice-idle gap (follow mode).
+
+    Exactly one drainer runs at a time (flock): collisions during a
+    readout just enqueue and their drainer exits — the live one loops
+    until the queue is empty, so it picks those entries up. Only speaks
+    entries TAGGED follow (enqueued by a follow-mode session) and recent
+    (FOLLOW_WINDOW_SECS) — chime-mode entries, call-held entries, and
+    stale backlog stay parked for /spoken-recap. A call starting
+    mid-readout stops the drainer.
+    """
+    def speakable(e):
+        return (not e.get("spoken") and e.get("follow")
+                and e.get("held") != "call"
+                and e.get("ts", 0) >= time.time() - FOLLOW_WINDOW_SECS)
+
+    try:
+        lock = open(DRAIN_LOCK, "w")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return
+    while True:
+        if active_say_pid() is not None:
+            time.sleep(0.3)
+            continue
+        if on_call():
+            return
+        # Load the queue and claim the oldest speakable entry. Marked
+        # spoken BEFORE the readout so the rewrite window (a concurrent
+        # append between our read and replace would be lost) stays tiny.
+        try:
+            with open(QUEUE_FILE, encoding="utf-8") as f:
+                entries = [json.loads(ln) for ln in f if ln.strip()]
+        except (OSError, ValueError):
+            return
+        entry = next((e for e in entries if speakable(e)), None)
+        if entry is None:
+            time.sleep(0.7)  # grace: catch an entry landing right now
+            try:
+                with open(QUEUE_FILE, encoding="utf-8") as f:
+                    if any(speakable(json.loads(ln))
+                           for ln in f if ln.strip()):
+                        continue
+            except (OSError, ValueError):
+                pass
+            return
+        entry["spoken"] = True
+        try:
+            tmp = QUEUE_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                for e in entries:
+                    f.write(json.dumps(e, ensure_ascii=False) + "\n")
+            os.replace(tmp, QUEUE_FILE)
+        except OSError:
+            return
+        proc = subprocess.Popen(
+            ["/usr/bin/say",
+             f"{speak_name(entry.get('project') or '')}: {entry.get('text')}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        try:
+            with open(PID_FILE, "w") as f:
+                f.write(str(proc.pid))
+        except OSError:
+            pass
+        proc.wait()
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -239,12 +346,21 @@ def main():
                  "held": "call"})
         return
     busy_pid = active_say_pid()
-    enqueue({"ts": int(time.time()), "project": project,
-             "session": session_id, "text": spoken, "spoken": busy_pid is None})
+    collision = resolve_collision(session_id)
+    entry = {"ts": int(time.time()), "project": project,
+             "session": session_id, "text": spoken, "spoken": busy_pid is None}
+    if collision == "follow":
+        entry["follow"] = True
+    enqueue(entry)
     if busy_pid is not None:
-        # Something is already talking: don't collide. Chime AFTER the current
-        # speech finishes so neither is masked; the summary waits in the
-        # queue for /spoken-recap.
+        # Something is already talking: don't collide.
+        if collision == "follow":
+            # The summary speaks automatically right after the current
+            # speech (and any earlier queued entries) — no chime.
+            spawn_drainer()
+            return
+        # chime (default): chime AFTER the current speech finishes so
+        # neither is masked; the summary waits for /spoken-recap.
         subprocess.Popen(
             ["/bin/sh", "-c",
              f"while kill -0 {busy_pid} 2>/dev/null; do sleep 0.3; done; "
@@ -264,6 +380,9 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        if "--drain" in sys.argv:
+            drain()
+        else:
+            main()
     finally:
         sys.exit(0)
