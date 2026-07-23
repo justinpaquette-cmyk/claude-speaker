@@ -17,7 +17,13 @@ false) for /spoken-recap (scripts/tts-recap.py). If the mic or camera is
 live (a call, a recording — checked via the compiled av-status helper),
 nothing plays at all, not even the chime; the entry just queues. Always
 exits 0 — TTS must never block the session.
+
+Freshness: the hook runs async and can beat Claude Code's transcript
+flush, so it fingerprints the last-handled message per session
+(~/.claude/tts-sessions/<session_id>.seen) and waits for the transcript
+to move past it — otherwise it would speak the previous turn.
 """
+import hashlib
 import json
 import os
 import re
@@ -34,6 +40,7 @@ AV_HELPER = os.path.join(CLAUDE_DIR, "scripts", "av-status")
 FALLBACK_CHAR_CAP = 600
 MARKER = "🔊"
 MODES = ("off", "summary", "full")
+FRESH_WAIT_SECS = 8  # must stay under the hook timeout in settings.json
 
 
 def read_mode(path):
@@ -54,7 +61,9 @@ def resolve_mode(session_id):
 
 
 def last_assistant_text(transcript_path):
+    """(newest assistant text, count of assistant text messages seen)."""
     text = None
+    n = 0
     with open(transcript_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -71,6 +80,59 @@ def last_assistant_text(transcript_path):
                      if isinstance(b, dict) and b.get("type") == "text"]
             if any(p.strip() for p in parts):
                 text = "\n".join(parts)
+                n += 1
+    return text, n
+
+
+def fresh_assistant_text(transcript_path, session_id):
+    """Newest assistant text not already handled for this session, or None.
+
+    The Stop hook runs async, so it can fire before Claude Code finishes
+    flushing the turn's final message to the transcript — a naive read then
+    speaks the PREVIOUS turn (one turn stale), or a mid-turn status note
+    whose lack of a 🔊 line triggers the long fallback. So: remember a
+    (count, hash) fingerprint of the last text we handled, poll until the
+    transcript moves past it, then let the file settle so we take the
+    turn's final message, not an intermediate one. Nothing new by the
+    deadline (duplicate Stop fire, empty turn) → None → stay silent.
+    """
+    seen_path = os.path.join(SESSION_DIR, f"{session_id}.seen")
+    try:
+        with open(seen_path) as f:
+            seen = f.read().strip()
+    except OSError:
+        seen = ""
+
+    def fingerprint(text, n):
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+        return f"{n}:{digest}"
+
+    deadline = time.time() + FRESH_WAIT_SECS
+    while True:
+        try:
+            text, n = last_assistant_text(transcript_path)
+        except OSError:
+            return None
+        if text and fingerprint(text, n) != seen:
+            break
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.4)
+    while time.time() < deadline:  # settle: transcript may still be growing
+        time.sleep(0.6)
+        try:
+            newer = last_assistant_text(transcript_path)
+        except OSError:
+            break
+        if newer == (text, n) or not newer[0]:
+            break
+        text, n = newer
+    try:
+        os.makedirs(SESSION_DIR, exist_ok=True)
+        with open(seen_path, "w") as f:
+            f.write(fingerprint(text, n))
+    except OSError:
+        pass
     return text
 
 
@@ -161,10 +223,7 @@ def main():
     mode = resolve_mode(session_id)
     if mode == "off":
         return
-    try:
-        text = last_assistant_text(transcript)
-    except OSError:
-        return
+    text = fresh_assistant_text(transcript, session_id)
     if not text:
         return
     spoken = pick_speech(text, mode)
