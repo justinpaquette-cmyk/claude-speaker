@@ -43,3 +43,26 @@ unnecessary.
 - No aging chime: a summary chimes once on arrival and then only changes color.
   Deliberate (nagging is worse than silence), but revisit if summaries get
   missed.
+- **The queue outgrows `KEEP` between recaps.** `KEEP = 200`, but the live queue
+  measured **210** entries on 2026-08-01 and **227** a few hours later the same
+  day — it is growing faster than anything cuts it back. The cause is not only
+  that `enqueue()` appends without trimming: **no writer in speak-response.py
+  caps the file at all**, since its own `save_queue()` rewrites every entry it
+  was given (`for e in entries`, no slice). `KEEP` exists solely in
+  tts-recap.py, so the file is only ever cut back when a recap happens to run.
+  Nothing is lost — it grows, it doesn't drop — so this is untidiness, not data
+  loss.
+
+  This is the scheduling decision for two items VERDICT.md already records
+  separately, *Queue write locking* and *Queue trimming*: **fix the trim as part
+  of the locking work, never before it.** Trimming from `enqueue()` today turns
+  a bare append into a read-modify-write racing three other writers — a real
+  bug in place of a cosmetic one. Trim belongs *inside* the lock.
+
+  One thing that changed since VERDICT was written: `--last N` / `--since S`
+  (`rr 3`, `rr 5m`) made entries past the unplayed set **addressable**. Before
+  them, everything beyond the recap window was backlog nobody could ask for, so
+  where the trim fell was invisible. Now `rr 50` can reach for something a trim
+  may already have dropped. Still not data loss — 200 is the stated retention —
+  but the boundary is now user-visible, which is an argument for making the cap
+  a setting rather than a constant when the locking work lands.
