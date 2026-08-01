@@ -1,12 +1,27 @@
 # claude-speaker 🔊
 
-Make Claude Code **speak its responses out loud** in your macOS terminal — free, on-device, no API keys, no cloud TTS. Built on Claude Code's Stop hook and the Mac's built-in `say` command.
+**Your Claude Code terminals tell you when they're done — out loud, on-device, for free.**
 
-You keep typing in the terminal exactly as before. When a response finishes, Claude reads you a one-sentence spoken summary. Built for running many sessions at once: only one voice ever speaks at a time, and nothing gets lost.
+No API keys, no cloud TTS, no tokens. Built on Claude Code's hooks and the Mac's built-in `say`.
+
+```
+you: (working in Chrome)
+  🔊 "the docs terminal: Playwright is green, all 34 tests pass."
+  🔊 "retool bot: stopped — the migration needs a column you haven't created yet."
+```
 
 ## Why
 
-If you run several Claude Code sessions in parallel, you stop watching them all. Speech turns "go check every terminal" into "I'll hear it when something finishes" — at zero cost, since the Apple system voice runs entirely on-device.
+Run four Claude Code sessions and you stop watching all four. You tab around hunting for the one that finished, and the one that got stuck sits there for ten minutes.
+
+Speech turns *"go check every terminal"* into *"I'll hear it when something finishes."* The Apple system voice runs entirely on-device, so it costs nothing and works offline.
+
+Then the problem becomes noise — four sessions all talking at once, or a voice cutting in while you're mid-thought. Most of this tool is the answer to that:
+
+- **One voice at a time.** Ever. Others queue.
+- **Nothing is lost.** A summary that couldn't be spoken waits, colors its terminal, and reads out when you go to it.
+- **It shuts up when you're on a call.** Mic or camera live → silence, not even a chime.
+- **`hold` mode** — nothing speaks unprompted at all. It chimes, colors the tab, and waits for you.
 
 ## Install
 
@@ -14,56 +29,11 @@ If you run several Claude Code sessions in parallel, you stop watching them all.
 git clone https://github.com/justinpaquette-cmyk/claude-speaker.git && cd claude-speaker && ./install.sh
 ```
 
-Then restart your Claude Code sessions (or open `/hooks` once in each running one). That's it — the next response you get will end with a spoken summary.
+Restart your Claude Code sessions (or open `/hooks` once in each running one). The next response you get will speak.
 
-The installer is idempotent and merge-safe: it copies three Python scripts into `~/.claude/scripts/`, three slash commands into `~/.claude/commands/`, compiles two small helpers (the mic/camera detector and the menu-bar indicator), adds a `Stop` and a `UserPromptSubmit` hook to your existing `~/.claude/settings.json` (never overwriting other settings), and appends a short convention to your `~/.claude/CLAUDE.md` telling Claude to end responses with a `🔊 one-liner` for the voice to read.
+The installer is idempotent and merge-safe. It copies three Python scripts to `~/.claude/scripts/` and three slash commands to `~/.claude/commands/`, compiles two small helpers (mic/camera detector, menu-bar indicator), adds a `Stop` and a `UserPromptSubmit` hook to your existing `~/.claude/settings.json` without touching anything else, and appends one convention to `~/.claude/CLAUDE.md` — end responses with a `🔊 one-liner` for the voice to read.
 
-## Usage
-
-Nothing to do — responses just speak. Forgotten what's available? **`/tts-wizard`** shows every feature with your current setting next to it and lets you pick a new setup from menus. Otherwise:
-
-| Command | What it does |
-|---|---|
-| `/tts-wizard` | **Guided tour** — see every feature and pick your setup from menus |
-| `/tts off` | Silence **this session** (others keep talking) |
-| `/tts summary` | Default: speak only the final 🔊 summary line |
-| `/tts full` | Speak the entire response (markdown/code sanitized out) |
-| `/tts <mode> global` | Set the default for all sessions |
-| `/tts collision follow` | This session's summaries auto-read right after the current speech |
-| `/tts collision chime [global]` | Back to chime-and-queue (default) |
-| `/tts name <spoken name>` | Fallback spoken name for this project's terminals |
-| `/tts color <color\|off>` | Tint shown while this terminal speaks (default `blue`) |
-| `/tts focus <on\|off>` | Read out when you click into a waiting terminal (default `on`) |
-| `/tts menubar <on\|off>` | Menu-bar indicator (default `on`) |
-| `/tts notify <on\|off>` | Banner for summaries that had to wait (default `on`) |
-| `/tts raise <window\|off>` | Opt-in: raise the speaking window (default `off`) |
-| `/tts collision hold` | Never speak unprompted: chime, color, wait for a click |
-| `/tts chime <on\|off>` | The soft arrival tone (default `on`) |
-| `repeat` / `rr` | Replay the last summary — **no model turn, no tokens** (see below) |
-| `shh` | Stop the voice mid-sentence |
-| `/spoken-recap` | Replay this session's queued summaries |
-| `/spoken-recap status` | List this session's queue without speaking |
-| `/spoken-recap all` | Replay queued summaries from every session |
-
-**What the voice calls a terminal:** its session title — set one with Claude Code's built-in `/rename` (auto titles work too) — else the `/tts name` custom name, else the project folder name. Titles and folder names are humanized for speech (camelCase/dashes split into words).
-
-## Missed it? `repeat` — free replay
-
-Type **`repeat`** (or **`rr`**) and the last summary plays again. It costs nothing: a `UserPromptSubmit` hook recognizes the trigger, speaks the summary itself, and exits 2, which makes Claude Code **erase the prompt and never call the model**. No turn, no tokens, no context growth — the same "free to look at" feel as `/context`.
-
-| Type | What happens |
-|---|---|
-| `repeat` / `rr` | This session's most recent summary, again |
-| `repeat full` | **The whole response**, not the one-line summary |
-| `repeat inverse` | Whichever rendering you *didn't* get — full if you're in `summary` mode, summary if you're in `full` |
-| `repeat all` / `rr all` | Every session's unplayed summaries |
-| `repeat status` | Lists this session's queue, speaks nothing |
-| `repeat stop` / `shh` / `hush` | Shut the voice up right now |
-| `stop` | Same — but only while the voice is talking; otherwise it's your prompt |
-
-`full` and `inverse` are free too. The hook payload carries this session's transcript path, so the response is re-rendered from disk with the same sanitizer that spoke it — heard the summary, want the detail? You get it without a model call.
-
-Only those exact strings are intercepted — "repeat full coverage for the auth tests" goes to Claude untouched. `again` is deliberately *not* a trigger: it far more often means "do that again" than "say that again". If a summary is mid-readout, `repeat` says so rather than talking over it.
+New here? Run **`/tts-wizard`**: it shows every feature with your current setting beside it and lets you pick a setup from menus.
 
 ## The terminal tells you what it wants
 
@@ -76,55 +46,114 @@ Colors carry the state, so a wall of terminals is readable at a glance. Nothing 
 | 🟡 **yellow** | has been waiting over 30s |
 | 🔴 **red** | has been waiting over 5min |
 
-**Click into a waiting terminal and it reads out** — it speaks what it was holding, then goes back to its own color. So a session that couldn't talk (something else was speaking, or you were on a call) sits there glowing until you go to it.
+**Click into a waiting terminal and it reads out**, then goes back to its own color. It triggers on the *switch-in*, not on the state — a terminal you're already sitting in never starts talking at you because a summary landed. You're looking right at it.
 
-It triggers on the *switch-in*, not on the state: a terminal you're already sitting in never starts talking at you because a summary landed — you're looking right at it.
+Buried behind another app? The **menu bar** carries the same state — `🔊 the docs terminal` while speaking, `🟡 2 waiting` while held — and a summary that *couldn't* be spoken raises a **notification banner**. Neither can take focus.
 
-Buried behind another app? The **menu bar** carries the same state (`🔊 the docs terminal` while speaking, `🟡 2 waiting` while held), and a summary that *couldn't* be spoken also raises a **notification banner**. Neither can take focus. `/tts menubar off`, `/tts notify off`.
+## When things speak: `chime` · `follow` · `hold`
 
-- Aging and focus-reads are handled by one locked watcher (`speak-response.py --watch`) that starts the moment something has to wait and **exits as soon as the queue is clear** — nothing polls in the background during normal use. It asks the terminal app for its own frontmost tab, so it needs no Accessibility permission.
-- **Tint** — Terminal.app tab background (AppleScript, matched by tty) or iTerm2 tab color (OSC 6). Any other emulator just skips the tint and still speaks. `/tts color <color|off>` sets the *speaking* color; the waiting ladder is fixed. `/tts focus off` keeps summaries waiting for `rr` instead of reading on focus.
-- **Raise** (`/tts raise window`, **off by default**) — brings the speaking window to the top via System Events `AXRaise`; `activate` is never used. It stays opt-in because macOS offers no raise that is guaranteed focus-free: AXRaise doesn't cross apps, but inside an app the raised window becomes *key*, so the next thing you type in that app can land there. It is skipped whenever your terminal app is frontmost, so typing in a terminal is never interrupted. Want zero window movement? Leave it off.
-- Raising needs **Accessibility** permission for your terminal app (System Settings → Privacy & Security → Accessibility). Without it the raise silently does nothing; `python3 ~/.claude/scripts/speak-response.py --check-raise` tells you which state you're in.
-- The terminal's real color is parked in `~/.claude/tts-tabcolor/<tty>.json` and a tint is dropped **only once the repaint is confirmed**, so no crash or kill can strand a terminal in a color. `python3 ~/.claude/scripts/speak-response.py --repair` is the last resort if one ever does.
+| Mode | Voice free | Voice busy |
+|---|---|---|
+| **`chime`** *(default)* | speaks now | chimes when the other finishes, then waits |
+| **`follow`** | speaks now | queues and auto-reads next, in finish order |
+| **`hold`** | **waits** | **waits** |
 
-## How multi-session collisions work
+`hold` is for when a voice would break your concentration: nothing ever speaks on its own. Every summary chimes softly, colors its tab, and waits to be clicked into. `/tts chime off` drops even the tone and leaves color alone.
 
-- Voice idle → a finishing session **speaks immediately**.
-- Voice busy → the **collision setting** decides, per session (override) or globally:
-  - **`chime`** (default) — wait for the current speech to end, play a soft **chime**, and queue the summary for `/spoken-recap`. You set the pacing.
-    - **`follow`** — queue the summary and **speak it automatically right after** the current speech (and any earlier queued summaries) finishes, prefixed with its project name. Sessions read out in finish order, serialized — never over each other.
-- Voice free but you're **deep in something**? `/tts collision hold` — nothing ever speaks unprompted. Every summary chimes softly, colors its tab, and waits to be clicked into. `/tts chime off` drops even the tone, leaving color alone.
-- `/tts collision <chime|follow|hold> [global]` switches between them; `repeat` or `/spoken-recap` replays a session's queued summaries either way.
+Set per terminal or for everything: `/tts collision <chime|follow|hold> [global]`.
 
-Follow mode only auto-reads summaries queued by follow-mode sessions in the last 5 minutes — older backlog and summaries held during a call never replay on their own; they wait for `/spoken-recap`.
+Follow mode only auto-reads summaries queued by follow-mode sessions in the last 5 minutes — older backlog and anything held during a call waits for you rather than surprising you later.
+
+## Missed it? `repeat` — free replay
+
+Type **`repeat`** (or **`rr`**) and it plays again, costing nothing. A `UserPromptSubmit` hook recognizes the trigger, speaks it, and exits 2 — which makes Claude Code **erase the prompt and never call the model**. No turn, no tokens, no context growth, the same "free to look at" feel as `/context`.
+
+| Type | What happens |
+|---|---|
+| `repeat` / `rr` | This session's most recent summary, again |
+| `repeat full` | **The whole response**, not the one-line summary |
+| `repeat inverse` | Whichever rendering you *didn't* get — full if you're in `summary` mode, summary if you're in `full` |
+| `repeat all` | Every session's unplayed summaries |
+| `repeat status` | Lists this session's queue, speaks nothing |
+| `shh` / `hush` / `repeat stop` | Shut the voice up right now |
+| `stop` | Same — but only while the voice is talking; otherwise it's your prompt |
+
+Every `repeat …` form also works as `rr …`.
+
+`full` and `inverse` are free for the same reason: the hook payload carries this session's transcript path, so the turn is re-rendered from disk with the same sanitizer that spoke it. Heard the summary, want the detail? You get it without a model call.
+
+Only those exact strings are intercepted — *"repeat full coverage for the auth tests"* goes to Claude untouched. `again` is deliberately **not** a trigger: it far more often means "do that again" than "say that again". For the same reason nothing is bound to <kbd>Esc</kbd>, which already interrupts the agent — a key that sometimes cancels your work and sometimes only silences audio is a key you stop trusting.
 
 ## On a call? It stays quiet
 
-If your **microphone or camera is actively in use** — a Zoom/Teams/FaceTime call, a Meet tab, a screen recording — the hook says nothing at all (not even the chime) and just queues the summary. A chime that was deferred behind another readout re-checks at the moment it would actually play, so a call starting *during* the wait still silences it. Run `/spoken-recap` after the call to hear what you missed.
+If your **microphone or camera is in use** — Zoom, Teams, FaceTime, a Meet tab, a screen recording — nothing plays at all, not even the chime. The summary just waits. A chime already deferred behind another readout re-checks at the moment it would actually play, so a call starting *during* the wait still silences it.
 
-Detection uses a tiny compiled helper (`scripts/av-status.c`, built by the installer) that reads the same CoreAudio/CoreMediaIO signals behind the orange and green menu-bar dots, so it works for any app, including browser-tab calls. It needs no mic/camera permissions and never touches the devices itself. If the helper isn't built (no Xcode Command Line Tools), speech simply always plays.
+Detection uses a tiny compiled helper (`scripts/av-status.c`) reading the same CoreAudio/CoreMediaIO signals behind the orange and green menu-bar dots, so it covers any app including browser-tab calls. It needs no mic or camera permission and never touches the devices. Not built (no Xcode Command Line Tools)? Speech simply always plays.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `/tts-wizard` | **Guided tour** — every feature with your current setting, configured from menus |
+| `/tts` | Report current settings |
+| `/tts <off\|summary\|full>` | What gets spoken — nothing, the 🔊 line, or the whole response |
+| `/tts collision <chime\|follow\|hold>` | When it speaks (table above) |
+| `/tts focus <on\|off>` | Read out when you click into a waiting terminal |
+| `/tts color <color\|off>` | Speaking tint — `red` `orange` `yellow` `green` `blue` `purple` or `#rrggbb` |
+| `/tts chime <on\|off>` | The soft arrival tone |
+| `/tts menubar <on\|off>` · `/tts notify <on\|off>` | Menu-bar indicator · notification banners |
+| `/tts length <n>` | Flat character cap for summaries (default: adaptive) |
+| `/tts raise <window\|off>` | Opt-in window raise (see caveat below) |
+| `/tts name <spoken name>` | What the voice calls this project's terminals |
+| `/spoken-recap [status\|all]` | Replay a queue, list it, or replay every session's |
+
+Every setting takes `global` to change the default for all sessions instead of just this one.
+
+**What the voice calls a terminal:** its session title — set one with Claude Code's `/rename`, auto titles work too — else the `/tts name` custom name, else the project folder name. Titles and folder names are humanized for speech (camelCase and dashes split into words).
 
 ## How it works
 
 ```
 response finishes ──▶ Stop hook (speak-response.py)
-                        │  reads last assistant message from the transcript
-                        │  prefers the 🔊-marked summary line, else sanitizes + caps
-                        │  logs to ~/.claude/tts-queue.jsonl
-                        ├─ mic/camera in use ──▶ silence, tab waits green→yellow→red
-                        ├─ voice idle ──▶ /usr/bin/say  (on-device Apple TTS)
-                        │                  + tab turns blue for the readout
-                        └─ voice busy ──▶ deferred chime, tab waits green→yellow→red
-                                            └─ focus the tab ──▶ it reads out
+                        │  reads the last assistant message from the transcript
+                        │  prefers the 🔊-marked line, else sanitizes + caps
+                        │  appends to ~/.claude/tts-queue.jsonl
+                        ├─ mic/camera live ─▶ silence, tab waits green→yellow→red
+                        ├─ hold mode ───────▶ chime, tab waits green→yellow→red
+                        ├─ voice idle ──────▶ /usr/bin/say, tab blue for the readout
+                        └─ voice busy ──────▶ deferred chime, tab waits
+                                                └─ click the tab ─▶ it reads out
 ```
 
-State lives in `~/.claude/tts-state.json` (global mode) and `~/.claude/tts-sessions/<session-id>.json` (per-session overrides). The hook is fully outside the model loop: no API calls, no tokens, no context impact beyond the one 🔊 line per response.
+Everything is outside the model loop: no API calls, no tokens, no context impact beyond the single 🔊 line per response.
+
+| Path | What lives there |
+|---|---|
+| `~/.claude/tts-state.json` | Global settings |
+| `~/.claude/tts-sessions/<id>.json` | Per-session overrides (safe to delete anytime) |
+| `~/.claude/tts-queue.jsonl` | Every summary, spoken or waiting (last 200) |
+| `~/.claude/tts-tabcolor/<tty>.json` | Each tinted terminal's real color, for restoring |
+| `~/.claude/tts-badge.txt` | What the menu-bar helper is currently showing |
+
+Aging colors and click-to-read are handled by one locked watcher (`speak-response.py --watch`) that starts when something first has to wait and **exits as soon as the queue is clear** — nothing polls in the background during normal use. It asks the terminal app for its own frontmost tab, so it needs no Accessibility permission.
+
+Colors are Terminal.app tab backgrounds (AppleScript, matched by tty) or iTerm2 tab colors (OSC 6). Any other emulator skips the tint and still speaks. A terminal's real color is parked on disk and a tint is dropped **only once the repaint is confirmed**, so no crash or kill can strand a terminal in a color — `speak-response.py --repair` is the last resort if one ever does.
+
+### The window-raise caveat
+
+`/tts raise window` brings the speaking window to the top, and is **off by default** for a reason worth knowing: macOS offers no raise that's guaranteed focus-free. `activate` steals focus across apps outright and is never used. `AXRaise` doesn't cross apps — but inside an app it makes the raised window *key*, so the next thing you type in that app can land there. It's skipped whenever your terminal app is already frontmost, so typing in a terminal is never interrupted. Want zero window movement, leave it off.
+
+It also needs Accessibility permission (System Settings → Privacy & Security → Accessibility). Without it the raise silently does nothing; `speak-response.py --check-raise` tells you which state you're in.
 
 ## Tips
 
 - The voice is whatever macOS is set to — the newer **Siri voices** sound far better than the default. System Settings → Accessibility → Spoken Content → System voice.
-- The 🔊 convention lives in `~/.claude/CLAUDE.md`; tweak the wording there to change how summaries sound.
+- The 🔊 convention lives in `~/.claude/CLAUDE.md`. Tweak the wording there to change how summaries sound.
+- Summary length is adaptive by default: it scales with how much the turn actually produced, so a big multi-step turn earns a longer readout and a one-liner stays short.
+
+## Requirements
+
+macOS (uses `/usr/bin/say` and `afplay`), Claude Code, Python 3. Xcode Command Line Tools for the two optional compiled helpers — without them, call-detection and the menu-bar item are skipped and everything else works.
 
 ## Uninstall
 
@@ -132,13 +161,14 @@ State lives in `~/.claude/tts-state.json` (global mode) and `~/.claude/tts-sessi
 rm ~/.claude/scripts/speak-response.py ~/.claude/scripts/tts-recap.py \
    ~/.claude/scripts/repeat-hook.py ~/.claude/scripts/av-status \
    ~/.claude/scripts/speaking-badge ~/.claude/tts-badge.txt \
-   ~/.claude/commands/tts.md ~/.claude/commands/spoken-recap.md \
+   ~/.claude/commands/tts.md ~/.claude/commands/tts-wizard.md \
+   ~/.claude/commands/spoken-recap.md \
    ~/.claude/tts-state.json ~/.claude/tts-queue.jsonl
 rm -rf ~/.claude/tts-sessions ~/.claude/tts-tabcolor
 ```
 
-Then remove the `Stop` and `UserPromptSubmit` hook entries from `~/.claude/settings.json` (or via `/hooks`) and the "Spoken Summary (TTS)" section from `~/.claude/CLAUDE.md`.
+Then remove the `Stop` and `UserPromptSubmit` entries from `~/.claude/settings.json` (or via `/hooks`), and the "Spoken Summary (TTS)" section from `~/.claude/CLAUDE.md`.
 
-## Requirements
+## License
 
-macOS (any recent version — uses `/usr/bin/say` and `afplay`), Claude Code, Python 3 (ships with Xcode Command Line Tools, which Claude Code users already have).
+MIT
