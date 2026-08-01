@@ -42,8 +42,11 @@ ls -t ~/.claude/projects/<encoded-cwd>/*.jsonl | head -1   # cwd, / and spaces �
    | **Raise** (`raise`) | Off by default — macOS can't raise a window without making it key inside its app, so it can take your keyboard |
 
    Also mention the two free tricks, since they cost nothing and people forget:
-   **`repeat`** (or `rr`) replays the last summary with no model turn and no
-   tokens; **`/spoken-recap`** replays a whole queue.
+   **`rr`** replays the last summary with no model turn and no tokens — and
+   so do **`repeat`**, **`replay`**, **`recap`** and **`tts`**, all five being
+   the same command so you never have to recall which word it was (each also
+   takes ` all` / ` full` / ` inverse` / ` status` / ` stop`);
+   **`/spoken-recap`** replays a whole queue.
 
 3. **Ask, don't quiz.** One `AskUserQuestion` call with these four:
    - *Scope* — "this session only" vs "all sessions (global)". Put whichever

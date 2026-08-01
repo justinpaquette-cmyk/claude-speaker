@@ -28,7 +28,8 @@ it read out and clear its color — either by clicking into it, or by a summary
 landing in the tab you are already watching (in `hold`, that is the one thing
 that speaks unprompted). A click-in reads out whatever the terminal holds, at
 any age — a colored tab is one you have not heard yet.
-`/tts focus off` leaves everything waiting for `rr` or `/spoken-recap`.
+`/tts focus off` leaves everything waiting for a replay word (`rr`, `repeat`,
+`replay`, `recap` or `tts` — all the same command) or `/spoken-recap`.
 
 **Ask** — the purple "you are the blocker" cue, the only one that means a session
 is stopped waiting on you rather than holding something for you (off the

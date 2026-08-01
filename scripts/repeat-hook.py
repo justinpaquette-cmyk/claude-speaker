@@ -8,24 +8,32 @@ never call the model. Nothing enters the conversation, so nothing is
 added to context and no tokens are spent, the same way /context costs
 nothing to look at.
 
-  repeat  / rr           this session's most recent summary again
-  repeat all / rr all    every session's unplayed summaries (all terminals)
-  repeat full            this turn again IN FULL — the whole response, not
+Five names do the same thing — `rr`, `repeat`, `replay`, `recap`, `tts` —
+so it works with whichever one you reach for. `<name>` below is any of them:
+
+  <name>                 this session's most recent summary again
+  <name> all             every session's unplayed summaries (all terminals)
+  <name> full            this turn again IN FULL — the whole response, not
                          the one-line summary
-  repeat inverse         this turn in whichever rendering you did NOT get:
+  <name> inverse         this turn in whichever rendering you did NOT get:
                          full if you are in summary mode, summary if full
-  repeat status          list this session's queue, speak nothing
-  repeat stop / shh      shut the voice up right now
+  <name> status          list this session's queue, speak nothing
+  <name> stop / shh      shut the voice up right now
   stop                   same, but only while the voice is actually
                          talking — otherwise it is your prompt, not ours
+
+`recap` and `tts` shadow the bare words only — the slash commands
+`/spoken-recap`, `/recap` and `/tts` are untouched, since a slash prompt is
+never the bare word. `tts off` and friends are not triggers either, so
+configuring the voice still reaches Claude normally.
 
 `full` and `inverse` cost nothing either: the hook payload carries this
 session's transcript path, so the response is re-rendered from the
 transcript with speak-response.py's own sanitizer. Nothing is sent to
 the model, so a full re-read is as free as a summary.
 
-`repeat` is the memorable name; `rr` is the same thing with less typing.
-Any other prompt falls through untouched (exit 0) and goes to Claude
+`rr` is the least typing; the rest are there so you never have to recall
+which one it was. Any other prompt falls through untouched (exit 0) and goes to Claude
 normally — the triggers are exact matches, so a real prompt that merely
 begins with "repeat" ("repeat the migration for the other table") is
 never swallowed. Deliberately NOT a trigger: "again", which far more
@@ -53,12 +61,20 @@ def busy():
 
 
 # Exact prompts that mean "say that again" rather than "do that again".
-TRIGGERS = {"rr": "latest", "repeat": "latest",
-            "rr all": "all", "repeat all": "all",
-            "rr status": "status", "repeat status": "status",
-            "rr full": "full", "repeat full": "full",
-            "rr inverse": "inverse", "repeat inverse": "inverse",
-            "rr stop": "stop", "repeat stop": "stop",
+#
+# Every name takes the WHOLE verb family, so the replay you get never
+# depends on which name you happened to remember: `rr full`, `replay full`
+# and `recap full` are one command. The names are deliberately redundant —
+# a replay you cannot remember the word for is a replay you do not use, and
+# the cost of an extra alias is one dict entry.
+REPLAY_NAMES = ("rr", "repeat", "replay", "recap", "tts")
+# suffix -> action. "" is the bare name: this session's latest.
+REPLAY_VERBS = {"": "latest", " all": "all", " status": "status",
+                " full": "full", " inverse": "inverse", " stop": "stop"}
+TRIGGERS = {name + suffix: action
+            for name in REPLAY_NAMES
+            for suffix, action in REPLAY_VERBS.items()}
+TRIGGERS.update({
             # One-word kill switch. Deliberately NOT bound to Esc: Esc
             # already interrupts the agent, and a key that sometimes
             # cancels your work and sometimes just silences audio is a
@@ -69,7 +85,7 @@ TRIGGERS = {"rr": "latest", "repeat": "latest",
             # thing to say to Claude. So it only silences the voice WHEN
             # THE VOICE IS TALKING; otherwise it falls through and is
             # handled as the instruction it plainly was.
-            "stop": "stop-if-speaking"}
+            "stop": "stop-if-speaking"})
 SPEAKER = os.path.expanduser("~/.claude/scripts/speak-response.py")
 
 
