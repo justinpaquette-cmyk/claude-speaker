@@ -66,6 +66,10 @@ TABCOLOR_DIR = os.path.join(CLAUDE_DIR, "tts-tabcolor")
 TAB_COLORS = {"red": "#550000", "orange": "#553300", "yellow": "#4d4d00",
               "green": "#004d1a", "blue": "#00304d", "purple": "#3d0055"}
 DEFAULT_TAB_COLOR = "red"
+# Every color this tool ever paints. Used to recognize a tab we stranded
+# (so we never save a tint as a tab's "original") and to repair one.
+TINTS = frozenset(tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+                  for h in TAB_COLORS.values())
 # Adaptive summary cap: proportional to the turn's sanitized volume, clamped.
 # An explicit /tts length (summary_chars) overrides this with a flat cap.
 SUMMARY_RATIO = 0.5
@@ -431,10 +435,13 @@ def _paint(tty, term, rgb):
         if rgb is None:
             return False
         r, g, b = (min(65535, c * 257) for c in rgb)
-        _osascript(_terminal_tabs(
-            f'if (tty of t) is "{tty}" then '
-            f"set background color of t to {{{r}, {g}, {b}}}"))
-        return True
+        # Must report real success: a silently-failed repaint (osascript
+        # timeout, Terminal busy) used to drop the restore record and
+        # strand the tab red forever.
+        return _osascript(_terminal_tabs(
+            f'if (tty of t) is "{tty}" then\n'
+            f"set background color of t to {{{r}, {g}, {b}}}\n"
+            "return \"ok\"\nend if") + '\nreturn "no-tab"') == "ok"
     if term == "iTerm.app":
         if rgb is None:
             seq = "\033]6;1;bg;*;default\a"
@@ -519,6 +526,51 @@ end tell
 return "ok"''') == "ok"
 
 
+def repair():
+    """Repaint any tab left showing one of our tints (`--repair`).
+
+    Last-resort cleanup for a tab whose restore record is gone, so the
+    color it used to have is unknowable: fall back to the profile's own
+    background color. Tabs with a live record are left alone — they may
+    be legitimately speaking right now.
+    """
+    if (os.environ.get("TERM_PROGRAM") or "") != "Apple_Terminal":
+        print("repair: Terminal.app only (iTerm2 tab colors reset themselves)")
+        return
+    held = {rec for rec in os.listdir(TABCOLOR_DIR)} if os.path.isdir(TABCOLOR_DIR) else set()
+    default = _osascript('tell application "Terminal"\n'
+                         "set AppleScript's text item delimiters to \",\"\n"
+                         "return (background color of default settings) as text\n"
+                         "end tell")
+    parts = [p.strip() for p in default.split(",")]
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        print("repair: could not read the profile's background color")
+        return
+    fixed = []
+    for tty, rgb in _all_tab_colors():
+        if rgb in TINTS and os.path.basename(tty) + ".json" not in held:
+            if _paint(tty, "Apple_Terminal", tuple(int(p) // 257 for p in parts)):
+                fixed.append(tty)
+    print(f"repair: repainted {len(fixed) or 'no'} tab(s)"
+          + (": " + " ".join(fixed) if fixed else ""))
+
+
+def _all_tab_colors():
+    """[(tty, (r,g,b)), ...] for every Terminal.app tab."""
+    out = _osascript('set acc to ""\ntell application "Terminal"\n'
+                     "repeat with w in windows\nrepeat with t in tabs of w\ntry\n"
+                     "set c to background color of t\n"
+                     "set acc to acc & (tty of t) & \" \" & (item 1 of c) & \" \" "
+                     "& (item 2 of c) & \" \" & (item 3 of c) & linefeed\n"
+                     "end try\nend repeat\nend repeat\nend tell\nreturn acc")
+    tabs = []
+    for line in out.splitlines():
+        bits = line.split()
+        if len(bits) == 4 and all(b.isdigit() for b in bits[1:]):
+            tabs.append((bits[0], tuple(int(b) // 257 for b in bits[1:])))
+    return tabs
+
+
 def check_raise():
     """Report whether window-raising can actually work here (used by /tts)."""
     term = os.environ.get("TERM_PROGRAM") or ""
@@ -560,8 +612,13 @@ def tint_start(tty, term, rgb, say_pid):
     # Already tinted (stale flash): keep the ORIGINAL color, not the tint.
     original = saved.get("restore") if saved else (
         _terminal_bg(tty) if term == "Apple_Terminal" else None)
-    if term == "Apple_Terminal" and original is None:
-        return False
+    if term == "Apple_Terminal":
+        if original is None:
+            return False
+        if tuple(original) in TINTS:
+            # Reading back a tint as the "original" would bake it in
+            # permanently. Refuse rather than strand the tab.
+            return False
     if not _paint(tty, term, rgb):
         return False
     try:
@@ -583,16 +640,28 @@ def _read_restore(tty):
 
 
 def tint_stop(tty):
-    """Put `tty` back to the color it had before the readout."""
+    """Put `tty` back to the color it had before the readout.
+
+    The record is dropped ONLY once the repaint is confirmed. A repaint
+    can fail transiently (osascript timeout, Terminal mid-redraw), and
+    dropping the record on a failed repaint is what strands a tab red
+    forever — nothing left to say what color it should have been.
+    """
     rec = _read_restore(tty)
     if not rec:
-        return
+        return True
     restore = rec.get("restore")
-    _paint(tty, rec.get("term"), tuple(restore) if restore else None)
+    for attempt in range(3):
+        if _paint(tty, rec.get("term"), tuple(restore) if restore else None):
+            break
+        time.sleep(0.4 * (attempt + 1))
+    else:
+        return False  # leave the record; restore_stale() retries later
     try:
         os.remove(_tabcolor_path(tty))
     except OSError:
         pass
+    return True
 
 
 def still_speaking(pid):
@@ -814,6 +883,8 @@ if __name__ == "__main__":
             untint(sys.argv[sys.argv.index("--untint") + 1])
         elif "--check-raise" in sys.argv:
             check_raise()
+        elif "--repair" in sys.argv:
+            repair()
         else:
             main()
     finally:
