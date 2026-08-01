@@ -15,6 +15,16 @@ Control the Stop-hook TTS (`~/.claude/scripts/speak-response.py`). Two settings:
   The 🔊 line (or fallback) is trimmed at a word boundary with a spoken
   "full response is in the terminal" tail.
 
+**Color** — the terminal is tinted while its summary is being read, then restored:
+- `red` (default), `orange`, `yellow`, `green`, `blue`, `purple`, or any `#rrggbb`
+- `off` — never tint this terminal
+
+**Raise** — whether the speaking terminal's window comes to the top:
+- `window` (default) — raise it in place; keyboard focus never moves, so typing
+  in another app is not interrupted. Needs Accessibility permission for the
+  terminal app (Terminal.app or iTerm2 only).
+- `off` — leave window stacking alone; the tint is the only cue.
+
 **Collision** — what happens when another session's voice is already talking:
 - `chime` — soft chime after the current speech; summary queues for `/spoken-recap` (default)
 - `follow` — summary auto-reads right after the current speech ends
@@ -26,12 +36,16 @@ Scope: **this session** by default; add `global` to set the default for all sess
 `/tts <off|summary|full> [global]` — set the mode.
 `/tts length <n> [global]` — set the summary character cap (e.g. `/tts length 2000`).
 `/tts collision <chime|follow> [global]` — set the collision policy.
+`/tts color <off|red|orange|yellow|green|blue|purple|#rrggbb> [global]` — speaking tint.
+`/tts raise <window|off> [global]` — raise the speaking window (no focus steal).
 `/tts name <spoken name>` — how the voice announces THIS project (e.g. `/tts name the docs terminal`).
 No argument = report current state.
 
 ## Steps
 
-1. Parse the arguments. `collision` as the first word means the setting is `collision` (valid values: `chime`, `follow`); `length` as the first word means the setting is `summary_chars` (value = the following positive integer); `name` as the first word means everything after it is the spoken name for this project; otherwise the setting is `mode` (valid values: `off`, `summary`, `full`). If no valid argument, skip to step 4 (report only).
+1. Parse the arguments. `collision` as the first word means the setting is `collision` (valid values: `chime`, `follow`); `length` as the first word means the setting is `summary_chars` (value = the following positive integer); `color` as the first word means the setting is `tab_color` (value = the following color word, `#rrggbb`, or `off`); `raise` as the first word means the setting is `raise` (valid values: `window`, `off`); `name` as the first word means everything after it is the spoken name for this project; otherwise the setting is `mode` (valid values: `off`, `summary`, `full`). If no valid argument, skip to step 4 (report only).
+
+   **`raise`:** after writing `window`, run `python3 ~/.claude/scripts/speak-response.py --check-raise` and report its line — raising silently does nothing until Accessibility is granted to the terminal app.
 
    **`length`:** write the integer under the key `"summary_chars"` (not `"length"`) into the target file per the scope rules below (session by default, `global` for all sessions). Read-modify-write, preserving other keys.
 
@@ -47,9 +61,9 @@ No argument = report current state.
    ```
    (`<encoded-cwd>` = cwd with `/` and spaces → `-`.) Then `mkdir -p ~/.claude/tts-sessions`; target file is `~/.claude/tts-sessions/<session_id>.json`.
 
-   **Write by merging, never clobbering:** read the target file's existing JSON (absent/invalid = `{}`), set just the one key (`"mode"` or `"collision"`), write it back. Both keys live in the same files.
+   **Write by merging, never clobbering:** read the target file's existing JSON (absent/invalid = `{}`), set just the one key (`"mode"`, `"collision"`, `"tab_color"`, `"raise"`, …), write it back. All of these keys live in the same files.
 
-4. Report state: from `~/.claude/tts-state.json` the global `mode` (absent = `summary`), `collision` (absent = `chime`), and `summary_chars` (absent = `adaptive`), plus this session's overrides from `~/.claude/tts-sessions/<session_id>.json` (absent = follows global), e.g. "TTS: this session = full (override), global default = summary, length = adaptive, collision = follow (global)".
+4. Report state: from `~/.claude/tts-state.json` the global `mode` (absent = `summary`), `collision` (absent = `chime`), `summary_chars` (absent = `adaptive`), `tab_color` (absent = `red`), and `raise` (absent = `window`), plus this session's overrides from `~/.claude/tts-sessions/<session_id>.json` (absent = follows global), e.g. "TTS: this session = full (override), global default = summary, length = adaptive, collision = follow (global), color = red, raise = window".
 
 5. If mode is `off` for this session, stop ending responses with the 🔊 line until it's turned back on. If `full`, the 🔊 line is unnecessary — drop it (the hook strips it anyway).
 
