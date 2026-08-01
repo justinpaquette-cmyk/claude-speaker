@@ -33,6 +33,7 @@ ls -t ~/.claude/projects/<encoded-cwd>/*.jsonl | head -1   # cwd, / and spaces �
    | **Delivery** (`collision`) | `chime` speak now if the voice is free, else chime and wait · `follow` waiting summaries auto-read in finish order · `hold` nothing speaks at a terminal you're not watching — chime, color the tab, wait to be clicked into; a summary landing in the focused tab still reads out |
    | **Click-to-talk** (`focus_speak`) | Being at a waiting terminal reads it out — clicking in, or a summary arriving in the tab you're already watching. Past red (5min) it's stale and stays quiet, so old backlog never starts talking |
    | **Colors** (`tab_color`) | 🔵 speaking · 🟢 waiting · 🟡 over 30s · 🔴 over 5min. The speaking color is settable; the waiting ladder is fixed. `off` disables tinting |
+   | **Question cue** (`ask_color`, `ask_speak`) | 🟣 an AskUserQuestion is open — the one color that means *you* are the blocker. Background tabs only (the tab you're in already shows the question), outranks the waiting ladder, never ages. `ask_speak` reads the question's headers aloud when it opens unfocused — silent under `hold`, which means nothing speaks at a terminal you aren't watching |
    | **Menu bar** (`menubar`) | Top bar shows `🔊 <terminal>` speaking or `🟡 2 waiting` |
    | **Banners** (`notify`) | Notification for a summary that *couldn't* be spoken. Never for one you just heard |
    | **Chime** (`chime`) | The soft arrival tone. Off = color only |
@@ -49,7 +50,8 @@ ls -t ~/.claude/projects/<encoded-cwd>/*.jsonl | head -1   # cwd, / and spaces �
      matches their phrasing first.
    - *Delivery* — hold / chime / follow, described in plain terms ("never
      interrupt me" vs "speak when free" vs "queue up and read in order").
-   - *Cues* — **multiSelect**: tab colors, menu bar, banners, arrival chime.
+   - *Cues* — **multiSelect**: tab colors, purple question cue, menu bar, banners,
+     arrival chime.
      Pre-frame it as "which of these do you want on" and treat unselected ones
      as off.
    - *Click-to-talk* — on/off.
@@ -59,7 +61,8 @@ ls -t ~/.claude/projects/<encoded-cwd>/*.jsonl | head -1   # cwd, / and spaces �
    whole wizard at them.
 
 4. **Apply** each choice with a `--set` call (session or global per the scope
-   answer). Cue answers map to: `tab_color` (a color name or `off`), `menubar`,
+   answer). Cue answers map to: `tab_color` (a color name or `off`), `ask_color`
+   (a color name or `off`; `ask_speak` on/off rides with it), `menubar`,
    `notify`, `chime` — each `on`/`off`.
 
 5. **Confirm** by re-running `--settings` and showing the result, then say in one

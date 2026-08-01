@@ -59,16 +59,26 @@ hooks = settings.setdefault("hooks", {})
 changed = False
 
 
-def register(event, script, entry):
+def register(event, script, entry, matcher=None, label=None):
+    """Add one hook, unless an equivalent one is already there.
+
+    Matched on the FULL command, not the script name: several hooks share
+    speak-response.py and differ only by flag (--ask-open, --ask-close), so
+    a name match would register the first and silently skip the rest.
+    """
     global changed
     groups = hooks.setdefault(event, [])
-    if any(h.get("command", "").endswith(script)
+    name = label or script
+    if any(h.get("command", "") == entry["command"]
            for group in groups for h in group.get("hooks", [])):
-        print(f"{event} hook already registered — leaving it as it is")
+        print(f"{name} hook already registered — leaving it as it is")
         return
-    groups.append({"hooks": [entry]})
+    group = {"hooks": [entry]}
+    if matcher:
+        group["matcher"] = matcher
+    groups.append(group)
     changed = True
-    print(f"{event} hook registered in ~/.claude/settings.json")
+    print(f"{name} hook registered in ~/.claude/settings.json")
 
 
 cmd = lambda name: "python3 " + os.path.expanduser(f"~/.claude/scripts/{name}")
@@ -80,6 +90,17 @@ register("Stop", "speak-response.py",
 # synchronous: it blocks the prompt (exit 2) so no tokens are spent.
 register("UserPromptSubmit", "repeat-hook.py",
          {"type": "command", "command": cmd("repeat-hook.py"), "timeout": 25})
+# Colors (and, outside `hold`, announces) a terminal that is blocked on an
+# AskUserQuestion. PreToolUse blocks the question from rendering until it
+# returns, so it only writes a marker and hands the slow part to a child.
+register("PreToolUse", "speak-response.py",
+         {"type": "command", "command": cmd("speak-response.py") + " --ask-open",
+          "timeout": 10},
+         matcher="AskUserQuestion", label="ask-open")
+register("PostToolUse", "speak-response.py",
+         {"type": "command", "command": cmd("speak-response.py") + " --ask-close",
+          "timeout": 10},
+         matcher="AskUserQuestion", label="ask-close")
 
 if changed:
     with open(path, "w") as f:

@@ -17,6 +17,7 @@ Control the Stop-hook TTS (`~/.claude/scripts/speak-response.py`). Two settings:
 
 **Color** — the tab color says what the terminal wants:
 - **blue** — reading out right now
+- **purple** — an AskUserQuestion is open: it is blocked on *your* answer
 - **green** — has a summary ready and waiting
 - **yellow** — waiting over 30s · **red** — waiting over 5min
 - `/tts color <color|off>` sets the *speaking* color (default `blue`); the
@@ -28,6 +29,27 @@ landing in the tab you are already watching (in `hold`, that is the one thing
 that speaks unprompted). Red is the cutoff: past 5 minutes a waiting summary
 has gone stale and stays quiet on a click-in, so hour-old backlog never starts
 talking. `/tts focus off` leaves everything waiting for `rr` or `/spoken-recap`.
+
+**Ask** — the purple "you are the blocker" cue, the only one that means a session
+is stopped waiting on you rather than holding something for you (off the
+green→yellow→red ladder on purpose: a different kind of state, not a later stage
+of waiting):
+- Shown **only while that tab is in the background**. The question is already on
+  screen in the tab you're looking at, so tinting it would be noise — switch away
+  and it goes purple, switch back and the tint drops. The question stays open
+  either way; this is a cue, not a state machine.
+- It **outranks** the waiting ladder on the same tab: a live question beats an
+  old summary.
+- Static — a decision doesn't get more urgent by being ignored, it just stays
+  yours. No aging to red.
+- `ask_speak` (default `on`) reads the question's *headers* aloud when one opens
+  unfocused ("waiting on your call. Aging, Audio") so you know what's being asked
+  without going to look. Silent on a call, silent if the voice is already busy,
+  and **silent under `hold`** — `hold` means nothing speaks at a terminal you
+  aren't watching, and a question is the loudest kind of unprompted speech there
+  is, not an exception to it. The purple tab and the menu bar carry it instead.
+- `/tts ask <color|off>` changes or kills the tint; `/tts ask-speak off` kills the
+  speech in `chime` and `follow` too.
 
 **Menu bar** — `menubar` (default `on`): the top bar shows `🔊 <terminal>` while
 something is speaking, or `🟡 2 waiting` when summaries are held. Needs the
@@ -64,6 +86,8 @@ Scope: **this session** by default; add `global` to set the default for all sess
 `/tts collision <chime|follow|hold> [global]` — set the delivery policy.
 `/tts chime <on|off> [global]` — the arrival tone.
 `/tts color <off|red|orange|yellow|green|blue|purple|#rrggbb> [global]` — speaking tint.
+`/tts ask <off|red|orange|yellow|green|blue|purple|#rrggbb> [global]` — tint for a terminal holding an open AskUserQuestion (default purple; shown only while that tab is in the background).
+`/tts ask-speak <on|off> [global]` — read the question's headers aloud when one opens unfocused (`hold` silences it regardless).
 `/tts focus <on|off> [global]` — read out when you click into a waiting terminal.
 `/tts menubar <on|off> [global]` — menu-bar indicator.
 `/tts notify <on|off> [global]` — banner for summaries that had to wait.
@@ -83,7 +107,8 @@ python3 ~/.claude/scripts/speak-response.py --set <key> <value> [--session <id>]
 ```
 
 1. Map the first word to a setting key: `collision`→`collision`, `chime`→`chime`,
-   `length`→`summary_chars`, `color`→`tab_color`, `focus`→`focus_speak`,
+   `length`→`summary_chars`, `color`→`tab_color`, `ask`→`ask_color`,
+   `ask-speak`→`ask_speak`, `focus`→`focus_speak`,
    `menubar`→`menubar`, `notify`→`notify`, `raise`→`raise`; anything else that is
    a valid mode (`off`/`summary`/`full`) means `mode`. No valid argument → skip to
    step 4 (report only). `name` is special — see below.

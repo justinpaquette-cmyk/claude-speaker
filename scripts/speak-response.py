@@ -44,9 +44,19 @@ Visual cue (Terminal.app tab background via AppleScript, iTerm2 tab color
 via OSC 6; any other emulator just speaks). The terminal itself tells you
 what it wants:
   blue    - reading out right now
+  purple  - an AskUserQuestion is open: it is waiting on YOUR answer
   green   - has a summary ready and waiting
   yellow  - has been waiting over 30s
   red     - has been waiting over 5min
+
+Purple is the only color that means "you are the blocker", so it outranks
+the waiting ladder on the same tab, and it is shown ONLY while that tab is
+in the background — the question is already on screen in the tab you are
+looking at, so tinting it would be noise. Switch away from an open question
+and it goes purple; switch back and the tint drops (the question stays open
+either way). When it first opens unfocused, the question's headers are read
+aloud (`ask_speak`), so you know what is being asked without looking. Both
+off via `/tts ask_color off` / `/tts ask_speak off`.
 Focus a waiting terminal and it reads out on the spot, then goes back to
 its own color — until it goes red, at which point it has stopped chasing
 you: it keeps its color and waits for `repeat` or /spoken-recap, so
@@ -84,6 +94,7 @@ QUEUE_FILE = os.path.join(CLAUDE_DIR, "tts-queue.jsonl")
 AV_HELPER = os.path.join(CLAUDE_DIR, "scripts", "av-status")
 DRAIN_LOCK = os.path.join(CLAUDE_DIR, "scripts", ".tts-drain.lock")
 TABCOLOR_DIR = os.path.join(CLAUDE_DIR, "tts-tabcolor")
+ASKING_DIR = os.path.join(CLAUDE_DIR, "tts-asking")
 # Speaking tint. Dark enough that white terminal text stays readable.
 TAB_COLORS = {"red": "#550000", "orange": "#553300", "yellow": "#4d4d00",
               "green": "#004d1a", "blue": "#00304d", "purple": "#3d0055"}
@@ -100,6 +111,13 @@ WAIT_STAGES = ((0, "green"), (30, "yellow"), (300, "red"))
 # terminal you are already looking at is exempt: it is seconds old by
 # construction (see main()).
 FOCUS_READ_WINDOW_SECS = WAIT_STAGES[-1][0]
+# An open AskUserQuestion: the session is blocked on Justin, not the other
+# way round. Deliberately off the green→yellow→red ladder so it reads as a
+# different KIND of state, not a further stage of waiting. Static (a
+# decision does not get more urgent by being ignored, it just stays yours)
+# and background-only — see the module docstring.
+ASK_TAB_COLOR = "purple"
+ASK_MAX_AGE_SECS = 86400  # forget an ask marker nothing ever closed
 WATCH_LOCK = os.path.join(CLAUDE_DIR, "scripts", ".tts-watch.lock")
 BADGE_FILE = os.path.join(CLAUDE_DIR, "tts-badge.txt")
 BADGE_HELPER = os.path.join(CLAUDE_DIR, "scripts", "speaking-badge")
@@ -406,6 +424,27 @@ def resolve_tab_color(session_id):
     return parse_color(raw if raw is not None else DEFAULT_TAB_COLOR)
 
 
+def resolve_ask_color(session_id):
+    """RGB to tint a terminal holding an open question, or None if off.
+
+    `ask_color` per-session > global > "orange". Same grammar as
+    `tab_color`, so `/tts ask_color off` drops the cue without touching
+    the speaking/waiting colors.
+    """
+    raw = None
+    paths = [os.path.join(SESSION_DIR, f"{session_id}.json")] if session_id else []
+    for path in paths + [STATE_FILE]:
+        try:
+            with open(path) as f:
+                val = json.load(f).get("ask_color")
+        except (OSError, ValueError):
+            continue
+        if isinstance(val, str) and val.strip():
+            raw = val.strip().lower()
+            break
+    return parse_color(raw if raw is not None else ASK_TAB_COLOR)
+
+
 def parse_color(raw):
     if raw in ("off", "none", "false"):
         return None
@@ -417,27 +456,35 @@ def parse_color(raw):
 
 def owning_tty():
     """The controlling terminal of the Claude Code session that fired this
-    hook: walk up from this process until a parent has one (the hook itself
-    is spawned without one). "/dev/ttysNNN", or None if there is no tty."""
+    hook. "/dev/ttysNNN", or None if there is no tty."""
+    return owning_tty_pid()[0]
+
+
+def owning_tty_pid():
+    """(tty, pid) of the Claude Code session that fired this hook: walk up
+    from this process until a parent has a controlling terminal (the hook
+    itself is spawned without one). That pid is the session's own — an ask
+    marker holds it so a killed session can never strand a tinted tab.
+    (None, None) if there is no tty."""
     pid = os.getpid()
     for _ in range(10):
         try:
             out = subprocess.run(["ps", "-o", "ppid=,tty=", "-p", str(pid)],
                                  capture_output=True, text=True).stdout.split()
         except OSError:
-            return None
+            return None, None
         if len(out) != 2:
-            return None
+            return None, None
         ppid, tty = out
         if tty != "??":
-            return tty if tty.startswith("/dev/") else "/dev/" + tty
+            return (tty if tty.startswith("/dev/") else "/dev/" + tty), pid
         try:
             pid = int(ppid)
         except ValueError:
-            return None
+            return None, None
         if pid <= 1:
-            return None
-    return None
+            return None, None
+    return None, None
 
 
 def _osascript(script):
@@ -617,10 +664,12 @@ def _all_tab_colors():
 SETTABLE = {"mode": MODES, "collision": COLLISIONS, "chime": ("on", "off"),
             "focus_speak": ("on", "off"), "menubar": ("on", "off"),
             "notify": ("on", "off"), "raise": RAISES,
-            "tab_color": "color", "summary_chars": "int"}
+            "tab_color": "color", "ask_color": "color",
+            "ask_speak": ("on", "off"), "summary_chars": "int"}
 DEFAULTS = {"mode": "summary", "collision": "chime", "chime": "on",
             "focus_speak": "on", "menubar": "on", "notify": "on",
             "raise": "off", "tab_color": DEFAULT_TAB_COLOR,
+            "ask_color": ASK_TAB_COLOR, "ask_speak": "on",
             "summary_chars": "adaptive"}
 
 
@@ -792,6 +841,164 @@ def tint_stop(tty):
     return True
 
 
+def _ask_path(tty):
+    return os.path.join(ASKING_DIR, os.path.basename(tty) + ".json")
+
+
+def live_asks():
+    """{tty: marker} for every terminal with an AskUserQuestion still open.
+
+    A marker whose session process is gone (or that nothing closed for a
+    day) is dropped here — that is what stops a killed session from
+    leaving a tab orange forever.
+    """
+    try:
+        files = os.listdir(ASKING_DIR)
+    except OSError:
+        return {}
+    out, cutoff = {}, time.time() - ASK_MAX_AGE_SECS
+    for fn in files:
+        if not fn.endswith(".json"):
+            continue
+        tty = "/dev/" + fn[:-len(".json")]
+        try:
+            with open(_ask_path(tty)) as f:
+                rec = json.load(f)
+        except (OSError, ValueError):
+            rec = None
+        if not isinstance(rec, dict) or rec.get("ts", 0) < cutoff \
+                or not _alive(rec.get("owner_pid")):
+            try:
+                os.remove(_ask_path(tty))
+            except OSError:
+                pass
+            continue
+        out[tty] = rec
+    return out
+
+
+def _alive(pid):
+    if not isinstance(pid, int):
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def ask_open(payload):
+    """An AskUserQuestion just opened: mark the terminal as blocked on you.
+
+    Tinting and speaking happen only if that tab is NOT the one you are
+    looking at — if it is, the question is already in front of you. The
+    marker is written either way, so switching away later still turns the
+    tab orange (the watcher owns that transition).
+
+    This runs as a PreToolUse hook, which BLOCKS the question from
+    rendering until it returns: it does the cheap part (write the marker)
+    and hands the AppleScript — focus check, tint, speech — to a detached
+    child, so the prompt is never held up by a terminal round-trip.
+    """
+    tty, owner_pid = owning_tty_pid()
+    if not tty:
+        return
+    session_id = payload.get("session_id") or ""
+    tool_input = payload.get("tool_input") or {}
+    questions = tool_input.get("questions") or []
+    headers = [str(q.get("header") or "").strip()
+               for q in questions if isinstance(q, dict)]
+    project = os.path.basename(payload.get("cwd") or "") or "unknown"
+    title = session_name(session_id)
+    rec = {"tty": tty, "term": os.environ.get("TERM_PROGRAM") or "",
+           "session": session_id, "ts": int(time.time()),
+           "owner_pid": owner_pid, "project": project,
+           "headers": [h for h in headers if h],
+           "name": humanize(title) if title else speak_name(project)}
+    try:
+        os.makedirs(ASKING_DIR, exist_ok=True)
+        with open(_ask_path(tty), "w") as f:
+            json.dump(rec, f)
+    except OSError:
+        return
+    subprocess.Popen([sys.executable, os.path.abspath(__file__),
+                      "--ask-announce", tty],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    spawn_watch()  # owns the focus transitions from here on
+
+
+def ask_announce(tty):
+    """Detached: first paint + read-out for a question that just opened.
+
+    Focused tab = you are already looking at the question: no tint, no
+    speech. Everything after this first moment is the watcher's job.
+    """
+    rec = live_asks().get(tty)
+    if not rec or focused_tty() == tty:
+        return
+    ask_paint(tty, rec)
+    speak_ask(rec)
+
+
+def ask_paint(tty, rec):
+    rgb = resolve_ask_color(rec.get("session"))
+    if not rgb:
+        return
+    cur = _read_restore(tty) or {}
+    if cur.get("state") == "speaking" and still_speaking(cur.get("pid")):
+        return  # a live readout owns the tab; the marker outlives it
+    if cur.get("shown") == list(rgb):
+        return  # already orange — every repaint is an osascript call
+    tint_start(tty, rec.get("term") or os.environ.get("TERM_PROGRAM") or "",
+               rgb, None, state="asking")
+
+
+def speak_ask(rec):
+    """Read the question's headers out — enough to know what is being asked
+    without going to look. Silent on a call, silent if the voice is already
+    busy (a question is not worth talking over a readout), silent if the
+    session has TTS or ask_speak off, and silent under `hold`."""
+    session_id = rec.get("session")
+    if resolve_mode(session_id) == "off":
+        return
+    if resolve_collision(session_id) == "hold":
+        # `hold` means nothing speaks at a terminal you are not watching,
+        # and the caller already established you are not watching this one.
+        # A question is not an exception to that — it is the loudest kind of
+        # unprompted speech there is. The purple tab and the menu bar carry
+        # it instead, and it stays yours to walk over to.
+        return
+    if resolve_setting(session_id, "ask_speak", ("on", "off"), "on") == "off":
+        return
+    if on_call() or active_say_pid() is not None:
+        return
+    headers = rec.get("headers") or []
+    what = ", ".join(humanize(h) for h in headers[:4])
+    text = f"{rec.get('name') or 'Claude'}: waiting on your call"
+    text += f". {what}." if what else "."
+    proc = subprocess.Popen(["/usr/bin/say", text],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
+    try:
+        with open(PID_FILE, "w") as f:
+            f.write(str(proc.pid))
+    except OSError:
+        pass
+
+
+def ask_clear(tty):
+    """The question is answered (or the turn ended): drop marker and tint."""
+    if not tty:
+        return
+    try:
+        os.remove(_ask_path(tty))
+    except OSError:
+        pass
+    if (_read_restore(tty) or {}).get("state") == "asking":
+        tint_stop(tty)
+
+
 def still_speaking(pid):
     """True while `pid` is a live `say` — pids get reused, so check the name."""
     if not isinstance(pid, int):
@@ -808,21 +1015,26 @@ def restore_stale():
     """Un-tint terminals whose tint has outlived its reason.
 
     A speaking tint is over when its `say` pid is gone; a pending tint is
-    over when the terminal has nothing unspoken left in the queue. Either
-    way the terminal goes back to its own color, so no crash or kill can
-    leave one stuck.
+    over when the terminal has nothing unspoken left in the queue; an
+    asking tint is over when the question is closed or the session that
+    asked it is gone. Either way the terminal goes back to its own color,
+    so no crash or kill can leave one stuck.
     """
     try:
         files = os.listdir(TABCOLOR_DIR)
     except OSError:
         return
     waiting = pending_by_tty()
+    asking = live_asks()
     for fn in files:
         if not fn.endswith(".json"):
             continue
         tty = "/dev/" + fn[:-len(".json")]
         rec = _read_restore(tty) or {}
-        if rec.get("state") == "pending":
+        if rec.get("state") == "asking":
+            if tty not in asking:
+                tint_stop(tty)
+        elif rec.get("state") == "pending":
             if not waiting.get(tty):
                 tint_stop(tty)
         elif not still_speaking(rec.get("pid")):
@@ -892,9 +1104,14 @@ def focused_tty():
 def watch():
     """Age the pending tints and read a terminal out when you look at it.
 
+    Also owns the orange ask cue: a terminal with an open question is
+    orange whenever it is in the BACKGROUND and its own color whenever you
+    are looking at it, so the tint follows focus for as long as the
+    question stays open.
+
     One instance at a time (flock). Runs only while something is unspoken
-    and exits as soon as the queue is clear, so nothing is polling in the
-    background during normal use.
+    or a question is open, and exits as soon as both are clear, so nothing
+    is polling in the background during normal use.
     """
     try:
         lock = open(WATCH_LOCK, "w")
@@ -908,22 +1125,42 @@ def watch():
     # start talking at you the moment a summary lands in it.
     last_focus = focused_tty()
     owed = None
+    badge_cleared = False
     while True:
         entries = load_queue()
         waiting = pending_by_tty(entries)
-        if not waiting:
-            restore_stale()  # clear any leftover pending tints
+        asking = live_asks()
+        if not waiting and not asking:
+            restore_stale()  # clear any leftover pending/asking tints
             if active_say_pid() is None:
                 badge(None)
             return
         now = time.time()
         focus = focused_tty()
-        oldest = min(e.get("ts", now) for q in waiting.values() for e in q)
         if active_say_pid() is None:  # a live readout owns the badge instead
-            stage = next(c for t, c in reversed(WAIT_STAGES) if now - oldest >= t)
-            n = sum(len(q) for q in waiting.values())
-            badge(f"{STAGE_EMOJI[stage]} {n} waiting")
+            if waiting:
+                oldest = min(e.get("ts", now) for q in waiting.values() for e in q)
+                stage = next(c for t, c in reversed(WAIT_STAGES)
+                             if now - oldest >= t)
+                n = sum(len(q) for q in waiting.values())
+                badge(f"{STAGE_EMOJI[stage]} {n} waiting")
+                badge_cleared = False
+            elif not badge_cleared:
+                # Only questions left — nothing is "waiting to be read".
+                badge(None)
+                badge_cleared = True
+        # Open questions first: orange while backgrounded, dropped the
+        # moment you look at the tab. The marker survives either way, so
+        # switching back and forth just repaints.
+        for tty, rec in asking.items():
+            if tty == focus:
+                if (_read_restore(tty) or {}).get("state") == "asking":
+                    tint_stop(tty)
+            else:
+                ask_paint(tty, rec)
         for tty, queued in waiting.items():
+            if tty in asking:
+                continue  # a live question outranks a summary on the same tab
             rgb = wait_color(now - min(e.get("ts", now) for e in queued))
             rec = _read_restore(tty) or {}
             # Never repaint over a live readout, and don't repaint a color
@@ -1190,6 +1427,10 @@ def main():
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         return
+    # The turn is over, so any question it asked is closed — clear the ask
+    # cue before anything can return early. Belt and braces for a
+    # PostToolUse that never fired (question dismissed, session killed).
+    ask_clear(owning_tty())
     transcript = payload.get("transcript_path")
     if not transcript or not os.path.exists(transcript):
         return
@@ -1307,7 +1548,18 @@ def _arg(flag):
 
 if __name__ == "__main__":
     try:
-        if "--drain" in sys.argv:
+        if "--ask-open" in sys.argv:
+            # PreToolUse[AskUserQuestion]: this terminal is now blocked on you.
+            try:
+                ask_open(json.load(sys.stdin))
+            except (json.JSONDecodeError, ValueError):
+                pass
+        elif "--ask-announce" in sys.argv:
+            ask_announce(sys.argv[sys.argv.index("--ask-announce") + 1])
+        elif "--ask-close" in sys.argv:
+            # PostToolUse[AskUserQuestion]: answered — drop marker and tint.
+            ask_clear(owning_tty())
+        elif "--drain" in sys.argv:
             drain()
         elif "--untint" in sys.argv:
             untint(sys.argv[sys.argv.index("--untint") + 1])

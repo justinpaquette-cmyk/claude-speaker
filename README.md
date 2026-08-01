@@ -20,7 +20,8 @@ Restart your Claude Code sessions and you're done — the next response speaks. 
 ## What you get
 
 - 🗣️ **Spoken summaries** the moment a response finishes, in the macOS voice you already like.
-- 🎨 **Terminals that show their state in color** — 🔵 speaking · 🟢 waiting · 🟡 30s · 🔴 5min. A wall of terminals becomes readable at a glance.
+- 🎨 **Terminals that show their state in color** — 🔵 speaking · 🟣 asking you something · 🟢 waiting · 🟡 30s · 🔴 5min. A wall of terminals becomes readable at a glance.
+- 🟣 **The one color that means *you're* the blocker.** A session stuck on a question goes purple — only while that tab is in the background, because the tab you're in already shows it.
 - 👆 **Click a waiting terminal and it reads out.** Land on it and it catches you up; once it's gone red it's stale, so it stays quiet and waits for `repeat`.
 - 🔁 **`repeat` replays anything — for free.** No model turn, no tokens, no context. `repeat full` gives you the entire response instead of the one-liner, also free.
 - 🤫 **`shh`** stops the voice mid-sentence.
@@ -36,11 +37,14 @@ Colors carry the state, so a wall of terminals is readable at a glance. Nothing 
 | Color | Meaning |
 |---|---|
 | 🔵 **blue** | reading out right now |
+| 🟣 **purple** | a question is open — it's blocked on *your* answer |
 | 🟢 **green** | has a summary ready and waiting |
 | 🟡 **yellow** | has been waiting over 30s |
 | 🔴 **red** | has been waiting over 5min |
 
 **Click into a waiting terminal and it reads out**, then goes back to its own color. Two rules keep that from becoming noise. **Red is stale**: a summary that's been waiting over 5 minutes has stopped chasing you, so landing on a tab holding hour-old backlog never starts a readout — it keeps its color until you ask, with `repeat` or `/spoken-recap`. And **the terminal you're already in counts as focused**: a summary landing in the tab you're watching just tells you, instead of making you click away and back.
+
+**Purple is the exception to all of that.** Every other color means a terminal is holding something *for* you; purple means it has stopped and is waiting *on* you — an open question. So it outranks the waiting ladder on the same tab, and it never ages, because a decision doesn't get more urgent by being ignored. It shows only while that tab is in the background: switch away from an open question and it goes purple, switch back and the tint drops. When one opens unfocused the question's headers are read aloud ("waiting on your call. Scope, Delivery") — unless you're on `hold`, which means nothing speaks at a terminal you aren't watching, questions included.
 
 Buried behind another app? The **menu bar** carries the same state — `🔊 the docs terminal` while speaking, `🟡 2 waiting` while held — and a summary that *couldn't* be spoken raises a **notification banner**. Neither can take focus.
 
