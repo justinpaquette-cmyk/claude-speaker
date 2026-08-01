@@ -31,7 +31,8 @@ Nothing to do — responses just speak. Control it with two slash commands:
 | `/tts collision follow` | This session's summaries auto-read right after the current speech |
 | `/tts collision chime [global]` | Back to chime-and-queue (default) |
 | `/tts name <spoken name>` | Fallback spoken name for this project's terminals |
-| `/tts color <color\|off>` | Tint shown while this terminal speaks (default `red`) |
+| `/tts color <color\|off>` | Tint shown while this terminal speaks (default `blue`) |
+| `/tts focus <on\|off>` | Read out when you focus a waiting terminal (default `on`) |
 | `/tts raise <window\|off>` | Opt-in: raise the speaking window (default `off`) |
 
 **What the voice calls a terminal:** its session title — set one with Claude Code's built-in `/rename` (auto titles work too) — else the `/tts name` custom name, else the project folder name. Titles and folder names are humanized for speech (camelCase/dashes split into words).
@@ -52,14 +53,24 @@ Type **`rr`** and the last summary plays again. It costs nothing: a `UserPromptS
 
 Only those three exact strings are intercepted; anything else goes to Claude untouched. If a summary is mid-readout, `rr` says so rather than talking over it.
 
-## See which session is talking
+## The terminal tells you what it wants
 
-While a summary is being read, that terminal **turns red** — and goes right back to normal when the voice stops. With several sessions running you can look up mid-sentence and know which one is speaking. Nothing moves, nothing takes your keyboard.
+Colors carry the state, so a wall of terminals is readable at a glance. Nothing moves, nothing takes your keyboard.
 
-- **Tint** — Terminal.app tab background (AppleScript, matched by tty) or iTerm2 tab color (OSC 6). Any other emulator just skips the tint and still speaks. `/tts color <red|orange|yellow|green|blue|purple|#rrggbb|off>`.
+| Color | Meaning |
+|---|---|
+| 🔵 **blue** | reading out right now |
+| 🟢 **green** | has a summary ready and waiting |
+| 🟡 **yellow** | has been waiting over 30s |
+| 🔴 **red** | has been waiting over 5min |
+
+**Look at a waiting terminal and it reads out** — focus the tab, it speaks what it was holding, then goes back to its own color. So a session that couldn't talk (something else was speaking, or you were on a call) just sits there glowing until you glance at it.
+
+- Aging and focus-reads are handled by one locked watcher (`speak-response.py --watch`) that starts the moment something has to wait and **exits as soon as the queue is clear** — nothing polls in the background during normal use. It asks the terminal app for its own frontmost tab, so it needs no Accessibility permission.
+- **Tint** — Terminal.app tab background (AppleScript, matched by tty) or iTerm2 tab color (OSC 6). Any other emulator just skips the tint and still speaks. `/tts color <color|off>` sets the *speaking* color; the waiting ladder is fixed. `/tts focus off` keeps summaries waiting for `rr` instead of reading on focus.
 - **Raise** (`/tts raise window`, **off by default**) — brings the speaking window to the top via System Events `AXRaise`; `activate` is never used. It stays opt-in because macOS offers no raise that is guaranteed focus-free: AXRaise doesn't cross apps, but inside an app the raised window becomes *key*, so the next thing you type in that app can land there. It is skipped whenever your terminal app is frontmost, so typing in a terminal is never interrupted. Want zero window movement? Leave it off.
 - Raising needs **Accessibility** permission for your terminal app (System Settings → Privacy & Security → Accessibility). Without it the raise silently does nothing; `python3 ~/.claude/scripts/speak-response.py --check-raise` tells you which state you're in.
-- The pre-speech color is parked in `~/.claude/tts-tabcolor/<tty>.json`, so a killed watcher can't leave a terminal stuck red — the next hook run puts it back.
+- The terminal's real color is parked in `~/.claude/tts-tabcolor/<tty>.json` and a tint is dropped **only once the repaint is confirmed**, so no crash or kill can strand a terminal in a color. `python3 ~/.claude/scripts/speak-response.py --repair` is the last resort if one ever does.
 
 ## How multi-session collisions work
 
@@ -84,10 +95,11 @@ response finishes ──▶ Stop hook (speak-response.py)
                         │  reads last assistant message from the transcript
                         │  prefers the 🔊-marked summary line, else sanitizes + caps
                         │  logs to ~/.claude/tts-queue.jsonl
-                        ├─ mic/camera in use ──▶ full silence + queue for /spoken-recap
+                        ├─ mic/camera in use ──▶ silence, tab waits green→yellow→red
                         ├─ voice idle ──▶ /usr/bin/say  (on-device Apple TTS)
-                        │                  + tab turns red for the readout, restored after
-                        └─ voice busy ──▶ deferred chime + queue for /spoken-recap
+                        │                  + tab turns blue for the readout
+                        └─ voice busy ──▶ deferred chime, tab waits green→yellow→red
+                                            └─ focus the tab ──▶ it reads out
 ```
 
 State lives in `~/.claude/tts-state.json` (global mode) and `~/.claude/tts-sessions/<session-id>.json` (per-session overrides). The hook is fully outside the model loop: no API calls, no tokens, no context impact beyond the one 🔊 line per response.

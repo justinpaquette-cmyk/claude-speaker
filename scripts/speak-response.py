@@ -33,12 +33,24 @@ live (a call, a recording — checked via the compiled av-status helper),
 nothing plays at all, not even the chime; the entry just queues. Always
 exits 0 — TTS must never block the session.
 
-Visual cue: while a summary is being read, the terminal it came from is
-tinted red (Terminal.app tab background via AppleScript, iTerm2 tab color
-via OSC 6) and restored the moment the voice stops — so you can see which
-session is talking, not just hear it. Off (or recolored) via `/tts color`.
-The original color is parked in ~/.claude/tts-tabcolor/<tty>.json so a
-killed watcher can't strand a terminal red: the next hook run restores it.
+Visual cue (Terminal.app tab background via AppleScript, iTerm2 tab color
+via OSC 6; any other emulator just speaks). The terminal itself tells you
+what it wants:
+  blue    - reading out right now
+  green   - has a summary ready and waiting
+  yellow  - has been waiting over 30s
+  red     - has been waiting over 5min
+Focus a waiting terminal and it reads out on the spot, then goes back to
+its own color. The aging and the focus read are done by a single locked
+watcher (`speak-response.py --watch`) that starts when something first
+has to wait and exits as soon as the queue is clear — nothing polls in
+the background during normal use. Colors off via `/tts color off`, focus
+reads off via `focus_speak`.
+
+Every tint parks the terminal's real color in
+~/.claude/tts-tabcolor/<tty>.json, and a tint is only ever dropped once
+the repaint is confirmed, so no crash or kill can strand a terminal in a
+color (`--repair` is the last resort if one ever does).
 
 Freshness: the hook runs async and can beat Claude Code's transcript
 flush, so it fingerprints the last-handled message per session
@@ -65,7 +77,14 @@ TABCOLOR_DIR = os.path.join(CLAUDE_DIR, "tts-tabcolor")
 # Speaking tint. Dark enough that white terminal text stays readable.
 TAB_COLORS = {"red": "#550000", "orange": "#553300", "yellow": "#4d4d00",
               "green": "#004d1a", "blue": "#00304d", "purple": "#3d0055"}
-DEFAULT_TAB_COLOR = "red"
+DEFAULT_TAB_COLOR = "blue"  # while actually speaking
+# A summary that could not be spoken yet ages in place: green when it is
+# ready to talk, yellow once it has been waiting a while, red once it has
+# been waiting a long time. Focus the terminal and it reads out.
+WAIT_STAGES = ((0, "green"), (30, "yellow"), (300, "red"))
+WATCH_LOCK = os.path.join(CLAUDE_DIR, "scripts", ".tts-watch.lock")
+WATCH_POLL_SECS = 1.5
+WATCH_MAX_AGE_SECS = 86400  # forget pending entries older than a day
 # Every color this tool ever paints. Used to recognize a tab we stranded
 # (so we never save a tint as a tab's "original") and to repair one.
 TINTS = frozenset(tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
@@ -600,11 +619,15 @@ def _tabcolor_path(tty):
     return os.path.join(TABCOLOR_DIR, os.path.basename(tty) + ".json")
 
 
-def tint_start(tty, term, rgb, say_pid):
-    """Tint `tty` for the duration of a readout, parking what to restore.
+def tint_start(tty, term, rgb, say_pid, state="speaking"):
+    """Tint `tty`, parking what to restore when the tint is done.
 
-    The restore record carries the speaking `say` pid so a killed watcher
-    can't strand the terminal: restore_stale() finishes the job later.
+    Two kinds of tint share this record. A "speaking" tint lasts one
+    readout and is owned by the `say` pid in the record — when that pid
+    is gone, the tint is over. A "pending" tint lasts as long as the
+    terminal has an unspoken summary and is owned by the queue instead
+    (pid is None). Either way restore_stale() can tell whether a tint has
+    outlived its reason and put the terminal back.
     """
     if not tty or not rgb or not term:
         return False
@@ -624,7 +647,8 @@ def tint_start(tty, term, rgb, say_pid):
     try:
         os.makedirs(TABCOLOR_DIR, exist_ok=True)
         with open(_tabcolor_path(tty), "w") as f:
-            json.dump({"term": term, "restore": original, "pid": say_pid}, f)
+            json.dump({"term": term, "restore": original, "pid": say_pid,
+                       "state": state, "shown": list(rgb)}, f)
     except OSError:
         pass
     return True
@@ -677,21 +701,163 @@ def still_speaking(pid):
 
 
 def restore_stale():
-    """Un-tint terminals whose readout is over but whose watcher died."""
+    """Un-tint terminals whose tint has outlived its reason.
+
+    A speaking tint is over when its `say` pid is gone; a pending tint is
+    over when the terminal has nothing unspoken left in the queue. Either
+    way the terminal goes back to its own color, so no crash or kill can
+    leave one stuck.
+    """
     try:
         files = os.listdir(TABCOLOR_DIR)
     except OSError:
         return
+    waiting = pending_by_tty()
     for fn in files:
         if not fn.endswith(".json"):
             continue
         tty = "/dev/" + fn[:-len(".json")]
-        if still_speaking((_read_restore(tty) or {}).get("pid")):
+        rec = _read_restore(tty) or {}
+        if rec.get("state") == "pending":
+            if not waiting.get(tty):
+                tint_stop(tty)
+        elif not still_speaking(rec.get("pid")):
+            tint_stop(tty)
+
+
+def load_queue():
+    try:
+        with open(QUEUE_FILE, encoding="utf-8") as f:
+            return [json.loads(ln) for ln in f if ln.strip()]
+    except (OSError, ValueError):
+        return []
+
+
+def save_queue(entries):
+    try:
+        tmp = QUEUE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            for e in entries:
+                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        os.replace(tmp, QUEUE_FILE)
+        return True
+    except OSError:
+        return False
+
+
+def pending_by_tty(entries=None):
+    """{tty: [unspoken entries, oldest first]} — what each terminal owes you."""
+    cutoff = time.time() - WATCH_MAX_AGE_SECS
+    waiting = {}
+    for e in (load_queue() if entries is None else entries):
+        if e.get("spoken") or not e.get("tty") or e.get("ts", 0) < cutoff:
             continue
-        tint_stop(tty)
+        waiting.setdefault(e["tty"], []).append(e)
+    return waiting
 
 
-def spawn_watcher(tty):
+def wait_color(age_secs):
+    """green → yellow → red as an unspoken summary ages."""
+    name = WAIT_STAGES[0][1]
+    for threshold, color in WAIT_STAGES:
+        if age_secs >= threshold:
+            name = color
+    return parse_color(name)
+
+
+def focused_tty():
+    """tty of the tab you are actually looking at, or None.
+
+    Asks the terminal app directly (its own `frontmost` property), so
+    this needs no Accessibility permission — unlike raising a window.
+    """
+    term = os.environ.get("TERM_PROGRAM") or ""
+    if term == "Apple_Terminal":
+        out = _osascript('tell application "Terminal"\nif frontmost then\n'
+                         "return tty of selected tab of front window\n"
+                         'end if\nend tell\nreturn ""')
+    elif term == "iTerm.app":
+        out = _osascript('tell application "iTerm2"\nif frontmost then\n'
+                         "return tty of current session of current window\n"
+                         'end if\nend tell\nreturn ""')
+    else:
+        return None
+    return out or None
+
+
+def watch():
+    """Age the pending tints and read a terminal out when you look at it.
+
+    One instance at a time (flock). Runs only while something is unspoken
+    and exits as soon as the queue is clear, so nothing is polling in the
+    background during normal use.
+    """
+    try:
+        lock = open(WATCH_LOCK, "w")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return  # another watcher already has it
+    term = os.environ.get("TERM_PROGRAM") or ""
+    while True:
+        entries = load_queue()
+        waiting = pending_by_tty(entries)
+        if not waiting:
+            restore_stale()  # clear any leftover pending tints
+            return
+        now = time.time()
+        focus = focused_tty()
+        for tty, queued in waiting.items():
+            rgb = wait_color(now - min(e.get("ts", now) for e in queued))
+            rec = _read_restore(tty) or {}
+            # Never repaint over a live readout, and don't repaint a color
+            # that is already showing (each repaint is an osascript call).
+            if rec.get("state") == "speaking" and still_speaking(rec.get("pid")):
+                continue
+            if rec.get("shown") != list(rgb):
+                tint_start(tty, queued[0].get("term") or term, rgb, None,
+                           state="pending")
+        if focus and focus in waiting and active_say_pid() is None and not on_call():
+            ready = [e for e in waiting[focus]
+                     if resolve_setting(e.get("session"), "focus_speak",
+                                        ("on", "off"), "on") == "on"]
+            if ready:
+                speak_on_focus(focus, ready)
+        time.sleep(WATCH_POLL_SECS)
+
+
+def speak_on_focus(tty, queued):
+    """You looked at the terminal — read it what it has been holding."""
+    text = " ... Next. ".join(
+        f"{e.get('name') or speak_name(e.get('project') or '')}: {e.get('text')}"
+        for e in queued)
+    stamps = {(e.get("ts"), e.get("text")) for e in queued}
+    entries = load_queue()
+    for e in entries:  # claim before speaking, so nobody doubles up
+        if (e.get("ts"), e.get("text")) in stamps:
+            e["spoken"] = True
+    if not save_queue(entries):
+        return
+    tint_stop(tty)
+    proc = subprocess.Popen(["/usr/bin/say", text],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
+    try:
+        with open(PID_FILE, "w") as f:
+            f.write(str(proc.pid))
+    except OSError:
+        pass
+    rgb = resolve_tab_color(queued[0].get("session"))
+    if tint_start(tty, queued[0].get("term"), rgb, proc.pid):
+        spawn_untinter(tty)
+
+
+def spawn_watch():
+    subprocess.Popen([sys.executable, os.path.abspath(__file__), "--watch"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+
+
+def spawn_untinter(tty):
     """Detached: hold the tint until the voice stops, then restore."""
     subprocess.Popen([sys.executable, os.path.abspath(__file__), "--untint", tty],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -814,24 +980,30 @@ def main():
     if not spoken:
         return
     project = os.path.basename(payload.get("cwd") or "") or "unknown"
+    rgb = resolve_tab_color(session_id)
+    tty = owning_tty()
+    term = os.environ.get("TERM_PROGRAM") or ""
     if on_call():
         # Mic or camera is live — Justin is probably on a call. Total
         # silence (even the chime would bleed into a meeting); the summary
-        # waits in the queue for /spoken-recap.
+        # waits in the queue, colors the tab, and reads out when the
+        # terminal is focused (or on /spoken-recap).
         enqueue({"ts": int(time.time()), "project": project,
                  "session": session_id, "text": spoken, "spoken": False,
-                 "held": "call"})
+                 "held": "call", "tty": tty, "term": term,
+                 "color": ("#%02x%02x%02x" % rgb) if rgb else "off",
+                 "name": humanize(session_name(session_id) or "")
+                         or speak_name(project)})
+        spawn_watch()
         return
     busy_pid = active_say_pid()
     collision = resolve_collision(session_id)
     # Resolve the announce-name now, while the session registry entry is
     # alive: /rename (or auto) session title > /tts names map > folder name.
     title = session_name(session_id)
-    # This session's terminal, carried on the entry so a later readout
-    # (follow-mode drainer) tints the terminal the summary CAME from.
-    rgb = resolve_tab_color(session_id)
-    tty = owning_tty()
-    term = os.environ.get("TERM_PROGRAM") or ""
+    # The terminal is carried on the entry so a later readout (the
+    # follow-mode drainer, or a focus read) tints the terminal the
+    # summary CAME from, not whichever one is doing the speaking.
     entry = {"ts": int(time.time()), "project": project,
              "session": session_id, "text": spoken, "spoken": busy_pid is None,
              "name": humanize(title) if title else speak_name(project),
@@ -842,7 +1014,10 @@ def main():
         entry["follow"] = True
     enqueue(entry)
     if busy_pid is not None:
-        # Something is already talking: don't collide.
+        # Something is already talking: don't collide. Either way the
+        # summary is now unspoken and waiting, so the tab starts aging
+        # green → yellow → red and reads out when you focus it.
+        spawn_watch()
         if collision == "follow":
             # The summary speaks automatically right after the current
             # speech (and any earlier queued entries) — no chime.
@@ -870,7 +1045,7 @@ def main():
     # Tint this terminal for the readout; a detached watcher restores it
     # when the voice stops, since the hook itself must return now.
     if tint_start(tty, term, rgb, proc.pid):
-        spawn_watcher(tty)
+        spawn_untinter(tty)
     if entry["raise"] == "window":
         raise_window(tty, term)
 
@@ -885,6 +1060,8 @@ if __name__ == "__main__":
             check_raise()
         elif "--repair" in sys.argv:
             repair()
+        elif "--watch" in sys.argv:
+            watch()
         else:
             main()
     finally:

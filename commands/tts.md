@@ -15,9 +15,16 @@ Control the Stop-hook TTS (`~/.claude/scripts/speak-response.py`). Two settings:
   The 🔊 line (or fallback) is trimmed at a word boundary with a spoken
   "full response is in the terminal" tail.
 
-**Color** — the terminal is tinted while its summary is being read, then restored:
-- `red` (default), `orange`, `yellow`, `green`, `blue`, `purple`, or any `#rrggbb`
-- `off` — never tint this terminal
+**Color** — the tab color says what the terminal wants:
+- **blue** — reading out right now
+- **green** — has a summary ready and waiting
+- **yellow** — waiting over 30s · **red** — waiting over 5min
+- `/tts color <color|off>` sets the *speaking* color (default `blue`); the
+  waiting ladder is fixed. `off` disables tinting for this terminal entirely.
+
+**Focus** — `focus_speak` (default `on`): focusing a waiting terminal makes it
+read out on the spot and clear its color. `/tts focus off` leaves it waiting for
+`rr` or `/spoken-recap` instead.
 
 **Raise** — whether the speaking terminal's window comes to the top:
 - `off` (default) — nothing ever moves; the tint is the only cue.
@@ -38,13 +45,14 @@ Scope: **this session** by default; add `global` to set the default for all sess
 `/tts length <n> [global]` — set the summary character cap (e.g. `/tts length 2000`).
 `/tts collision <chime|follow> [global]` — set the collision policy.
 `/tts color <off|red|orange|yellow|green|blue|purple|#rrggbb> [global]` — speaking tint.
+`/tts focus <on|off> [global]` — read out when the waiting terminal is focused.
 `/tts raise <window|off> [global]` — raise the speaking window (no focus steal).
 `/tts name <spoken name>` — how the voice announces THIS project (e.g. `/tts name the docs terminal`).
 No argument = report current state.
 
 ## Steps
 
-1. Parse the arguments. `collision` as the first word means the setting is `collision` (valid values: `chime`, `follow`); `length` as the first word means the setting is `summary_chars` (value = the following positive integer); `color` as the first word means the setting is `tab_color` (value = the following color word, `#rrggbb`, or `off`); `raise` as the first word means the setting is `raise` (valid values: `window`, `off`); `name` as the first word means everything after it is the spoken name for this project; otherwise the setting is `mode` (valid values: `off`, `summary`, `full`). If no valid argument, skip to step 4 (report only).
+1. Parse the arguments. `collision` as the first word means the setting is `collision` (valid values: `chime`, `follow`); `length` as the first word means the setting is `summary_chars` (value = the following positive integer); `color` as the first word means the setting is `tab_color` (value = the following color word, `#rrggbb`, or `off`); `focus` as the first word means the setting is `focus_speak` (valid values: `on`, `off`); `raise` as the first word means the setting is `raise` (valid values: `window`, `off`); `name` as the first word means everything after it is the spoken name for this project; otherwise the setting is `mode` (valid values: `off`, `summary`, `full`). If no valid argument, skip to step 4 (report only).
 
    **`raise`:** after writing `window`, run `python3 ~/.claude/scripts/speak-response.py --check-raise` and report its line — raising silently does nothing until Accessibility is granted to the terminal app.
 
