@@ -44,7 +44,11 @@ Colors carry the state, so a wall of terminals is readable at a glance. Nothing 
 
 **Click into a waiting terminal and it reads out**, then goes back to its own color — whatever age the summary is. A colored tab is one you haven't heard yet, so clicking it always clears it. And **the terminal you're already in counts as focused**: a summary landing in the tab you're watching just tells you, instead of making you click away and back to hear it.
 
+It reads the **newest 3**, not the whole backlog. After a long session a tab can be holding a dozen updates, and hearing all of them is a wall of mostly-stale speech; you want the last couple of things that happened. So it counts the rest instead of reading them — *"8 older updates skipped. probot: the plan phase is committed. … Next. berkshire: deployed, the page is live"* — oldest-first inside that window, so **the last words you hear are the current state**. `/tts recap_max <n>` moves the line. The skipped ones are still marked played and the tab still clears, so the next click isn't the same wall again; **`repeat 10` or `repeat 30m` is how you get them back**, since a numbered pop ignores the played flag.
+
 **Purple is the exception to all of that.** Every other color means a terminal is holding something *for* you; purple means it has stopped and is waiting *on* you — an open question. So it outranks the waiting ladder on the same tab, and it never ages, because a decision doesn't get more urgent by being ignored. It shows only while that tab is in the background: switch away from an open question and it goes purple, switch back and the tint drops. When one opens unfocused the question's headers are read aloud ("waiting on your call. Scope, Delivery") — unless you're on `hold`, which means nothing speaks at a terminal you aren't watching, questions included.
+
+**Click into an open question and it reads you the question**, in full, with the options you're choosing between — *"claude speaker is asking. Question one: Which readouts should the cap apply to? Options: click-in and bare recap; click-in only; bare recap only."* The one state that means *you're* the blocker was also the only one you couldn't hear on demand: the purple cue fires once, unfocused, and only reads headers. Summaries have click-to-talk; questions do too. It re-reads up to 3 times (`/tts ask_reads <n>`) and then stays quiet, because by then it's on screen in front of you — but the tab still goes purple every time you switch away, since that tracks the question being *open*, not unheard. Unlike the unprompted cue this **isn't** silenced by `hold`: clicking in is you asking. `/tts focus off` (no click-to-talk) or `/tts ask off` does silence it.
 
 Buried behind another app? The **menu bar** carries the same state — `🔊 the docs terminal` while speaking, `🟡 2 waiting` while held — and a summary that *couldn't* be spoken raises a **notification banner**. Neither can take focus.
 
@@ -82,6 +86,8 @@ Type **`repeat`** (or **`rr`**) and it plays again, costing nothing. A `UserProm
 
 A numbered pop deliberately **ignores whether you already heard it**: "the last 3" means the last 3. Reading them marks them played, so a later bare `repeat all` won't say them twice. A number bigger than the stack just gives you the whole stack.
 
+That's also why **`repeat all` is capped and `repeat 3` isn't.** The bare form speaks the newest 3 and counts the rest ("8 older updates skipped") — it's the one that would otherwise read a whole session back at you. When you name a number you get that number, whatever it is. So a count is both the thing that limits the readout *and* the escape hatch from it: `repeat 10` hears everything the cap skipped, and `repeat 30m` does it by time.
+
 **Five names, one command.** `rr`, `repeat`, `replay`, `recap` and `tts` each take that whole list — `rr full`, `replay full` and `recap full` are the same thing. A replay you can't remember the word for is a replay you don't use, and an alias costs one dict entry. The slash commands are untouched: `/tts`, `/recap` and `/spoken-recap` are never bare words, and `tts off` still reaches Claude, so configuring the voice works normally.
 
 `full` and `inverse` are free for the same reason: the hook payload carries this session's transcript path, so the turn is re-rendered from disk with the same sanitizer that spoke it. Heard the summary, want the detail? You get it without a model call.
@@ -107,6 +113,8 @@ Detection uses a tiny compiled helper (`scripts/av-status.c`) reading the same C
 | `/tts chime <on\|off>` | The soft arrival tone |
 | `/tts menubar <on\|off>` · `/tts notify <on\|off>` | Menu-bar indicator · notification banners |
 | `/tts length <n>` | Flat character cap for summaries (default: adaptive) |
+| `/tts recap_max <n>` | Updates a backlog readout speaks (default 3; `repeat 10` is never capped) |
+| `/tts ask_reads <n>` | Times clicking into an open question re-reads it (default 3) |
 | `/tts raise <window\|off>` | Opt-in window raise (see caveat below) |
 | `/tts name <spoken name>` | What the voice calls this project's terminals |
 | `/spoken-recap [status\|all]` | Replay a queue, list it, or replay every session's |

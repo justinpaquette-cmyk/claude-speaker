@@ -33,6 +33,17 @@ any age — a colored tab is one you have not heard yet.
 queue is a stack, so a replay word also takes a count or a window: `rr 3`
 pops the last three updates, `rr 5m` pops the last five minutes.
 
+**Recap max** — `recap_max` (default `3`): how many updates a *backlog* readout
+actually speaks — a click-in, and the bare `rr all` / `/spoken-recap`. A long
+session leaves a tab holding a dozen updates and reading all of them is a wall
+of stale speech, so it reads the newest few, **oldest-first inside that window
+so the last thing you hear is the newest**, and counts the rest up front: "8
+older updates skipped." The skipped ones are still marked played and the tint
+still clears — nothing is left to re-hear by accident, and the full list still
+prints. `rr 10` / `rr 5m` are the way back to them, since a numbered pop
+ignores the played flag by design. Those forms are **not** capped: you named a
+number, you get that number.
+
 **Ask** — the purple "you are the blocker" cue, the only one that means a session
 is stopped waiting on you rather than holding something for you (off the
 green→yellow→red ladder on purpose: a different kind of state, not a later stage
@@ -51,6 +62,21 @@ of waiting):
   and **silent under `hold`** — `hold` means nothing speaks at a terminal you
   aren't watching, and a question is the loudest kind of unprompted speech there
   is, not an exception to it. The purple tab and the menu bar carry it instead.
+- **Click into a terminal holding an open question and it reads the question
+  out** — the full text plus the option *labels* ("claude speaker is asking.
+  Question one: Which readouts should the cap apply to? Options: click-in and
+  bare recap; click-in only; bare recap only"), labels only because the
+  descriptions are on screen. Summaries have click-to-talk; the one state that
+  means *you* are the blocker should too. `ask_reads` (default `3`) caps how
+  many times a later click-in repeats it — past that it stays silent, because
+  by then it has been in front of you a while. The purple tab still comes back
+  every time you switch away: that tracks the question being *open*, not
+  unheard.
+- The click-in read is **not** silenced by `hold`, unlike the unfocused cue
+  above: `hold` governs unprompted speech at a terminal you aren't watching,
+  and clicking in is you asking — the same reason a click-in summary isn't
+  gated by it either. `focus_speak off` (no click-to-talk at all) and
+  `ask_speak off` both silence it.
 - `/tts ask <color|off>` changes or kills the tint; `/tts ask-speak off` kills the
   speech in `chime` and `follow` too.
 
@@ -92,6 +118,8 @@ Scope: **this session** by default; add `global` to set the default for all sess
 `/tts ask <off|red|orange|yellow|green|blue|purple|#rrggbb> [global]` — tint for a terminal holding an open AskUserQuestion (default purple; shown only while that tab is in the background).
 `/tts ask-speak <on|off> [global]` — read the question's headers aloud when one opens unfocused (`hold` silences it regardless).
 `/tts focus <on|off> [global]` — read out when you click into a waiting terminal.
+`/tts recap_max <n> [global]` — how many updates a backlog readout speaks (default 3; `rr <n>` / `rr <n>m` are never capped).
+`/tts ask_reads <n> [global]` — how many times clicking into an open question re-reads it (default 3).
 `/tts menubar <on|off> [global]` — menu-bar indicator.
 `/tts notify <on|off> [global]` — banner for summaries that had to wait.
 `/tts raise <window|off> [global]` — raise the speaking window (no focus steal).
@@ -112,6 +140,7 @@ python3 ~/.claude/scripts/speak-response.py --set <key> <value> [--session <id>]
 1. Map the first word to a setting key: `collision`→`collision`, `chime`→`chime`,
    `length`→`summary_chars`, `color`→`tab_color`, `ask`→`ask_color`,
    `ask-speak`→`ask_speak`, `focus`→`focus_speak`,
+   `recap_max`/`recap-max`→`recap_max`, `ask_reads`/`ask-reads`→`ask_reads`,
    `menubar`→`menubar`, `notify`→`notify`, `raise`→`raise`; anything else that is
    a valid mode (`off`/`summary`/`full`) means `mode`. No valid argument → skip to
    step 4 (report only). `name` is special — see below.

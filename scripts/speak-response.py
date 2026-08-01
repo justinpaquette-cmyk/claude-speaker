@@ -58,7 +58,12 @@ either way). When it first opens unfocused, the question's headers are read
 aloud (`ask_speak`), so you know what is being asked without looking. Both
 off via `/tts ask_color off` / `/tts ask_speak off`.
 Focus a waiting terminal and it reads out on the spot, whatever its age,
-then goes back to its own color.
+then goes back to its own color — the newest `recap_max` (3) of what it
+holds, oldest-first inside that window so the last thing you hear is the
+newest, with anything older counted rather than read ("8 older updates
+skipped"). Focus a terminal holding an open QUESTION and it reads the
+question out too, options included, up to `ask_reads` (3) times — the state
+that means you are the blocker is the one most worth hearing on demand.
 The aging and the focus read are done by a single locked
 watcher (`speak-response.py --watch`) that starts when something first
 has to wait and exits as soon as the queue is clear — nothing polls in
@@ -107,6 +112,13 @@ DEFAULT_TAB_COLOR = "blue"  # while actually speaking
 # ready to talk, yellow once it has been waiting a while, red once it has
 # been waiting a long time. Focus the terminal and it reads out.
 WAIT_STAGES = ((0, "green"), (30, "yellow"), (300, "red"))
+# How many updates a backlog readout actually speaks. After a long session
+# the queue behind a tab can be dozens of entries, and reading all of them
+# is a wall of mostly-stale speech. Read the newest few, oldest-first so
+# the last thing you hear is the current state, and say up front how many
+# were skipped. Skipped entries are still marked played (the tab clears);
+# `repeat 10` / `repeat 30m` is the way back to them.
+RECAP_MAX_DEFAULT = 3
 # An open AskUserQuestion: the session is blocked on Justin, not the other
 # way round. Deliberately off the green→yellow→red ladder so it reads as a
 # different KIND of state, not a further stage of waiting. Static (a
@@ -114,6 +126,11 @@ WAIT_STAGES = ((0, "green"), (30, "yellow"), (300, "red"))
 # and background-only — see the module docstring.
 ASK_TAB_COLOR = "purple"
 ASK_MAX_AGE_SECS = 86400  # forget an ask marker nothing ever closed
+# Times clicking into a terminal re-reads the question it is holding. It
+# stops after this because the question is on screen in front of you by
+# then; the purple tab still comes back, because that tracks the question
+# being OPEN, not unheard.
+ASK_READS_DEFAULT = 3
 WATCH_LOCK = os.path.join(CLAUDE_DIR, "scripts", ".tts-watch.lock")
 BADGE_FILE = os.path.join(CLAUDE_DIR, "tts-badge.txt")
 BADGE_HELPER = os.path.join(CLAUDE_DIR, "scripts", "speaking-badge")
@@ -169,12 +186,16 @@ def resolve_raise(session_id):
     return resolve_setting(session_id, "raise", RAISES, "off")
 
 
-def explicit_summary_cap(session_id):
-    """Explicit flat cap from /tts length: per-session "summary_chars" > global.
+def explicit_int(session_id, key):
+    """A positive int setting: per-session file > global state file.
 
-    A positive number; anything else (missing, zero, non-numeric, bool) is
-    ignored and the search falls through. None means "no explicit cap set" —
-    the caller then falls back to the adaptive proportional cap.
+    The numeric counterpart to resolve_setting() — that one .strip()s what
+    it reads and matches it against a tuple of allowed strings, so it can
+    only ever resolve enums. Anything that is not a positive number
+    (missing, zero, non-numeric, bool) is ignored and the search falls
+    through. None means "not explicitly set", leaving the caller free to
+    pick a different fallback per setting: adaptive for summary_chars, a
+    plain constant for the rest.
     """
     paths = []
     if session_id:
@@ -183,7 +204,7 @@ def explicit_summary_cap(session_id):
     for path in paths:
         try:
             with open(path) as f:
-                val = json.load(f).get("summary_chars")
+                val = json.load(f).get(key)
         except (OSError, ValueError):
             continue
         if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
@@ -199,7 +220,17 @@ def adaptive_cap(text):
 
 def resolve_summary_cap(session_id, text):
     """Explicit /tts length cap if set, else the adaptive proportional cap."""
-    return explicit_summary_cap(session_id) or adaptive_cap(text)
+    return explicit_int(session_id, "summary_chars") or adaptive_cap(text)
+
+
+def resolve_recap_max(session_id):
+    """How many updates a backlog readout speaks. See RECAP_MAX_DEFAULT."""
+    return explicit_int(session_id, "recap_max") or RECAP_MAX_DEFAULT
+
+
+def resolve_ask_reads(session_id):
+    """How many times a click-in re-reads an open question."""
+    return explicit_int(session_id, "ask_reads") or ASK_READS_DEFAULT
 
 
 def last_assistant_text(transcript_path):
@@ -661,12 +692,14 @@ SETTABLE = {"mode": MODES, "collision": COLLISIONS, "chime": ("on", "off"),
             "focus_speak": ("on", "off"), "menubar": ("on", "off"),
             "notify": ("on", "off"), "raise": RAISES,
             "tab_color": "color", "ask_color": "color",
-            "ask_speak": ("on", "off"), "summary_chars": "int"}
+            "ask_speak": ("on", "off"), "summary_chars": "int",
+            "recap_max": "int", "ask_reads": "int"}
 DEFAULTS = {"mode": "summary", "collision": "chime", "chime": "on",
             "focus_speak": "on", "menubar": "on", "notify": "on",
             "raise": "off", "tab_color": DEFAULT_TAB_COLOR,
             "ask_color": ASK_TAB_COLOR, "ask_speak": "on",
-            "summary_chars": "adaptive"}
+            "summary_chars": "adaptive", "recap_max": RECAP_MAX_DEFAULT,
+            "ask_reads": ASK_READS_DEFAULT}
 
 
 def _settings_path(session_id):
@@ -904,12 +937,25 @@ def ask_open(payload):
     questions = tool_input.get("questions") or []
     headers = [str(q.get("header") or "").strip()
                for q in questions if isinstance(q, dict)]
+    # Headers carry the unfocused first-open cue; the full text carries the
+    # click-in read-out. Option LABELS only — the descriptions are
+    # elaboration you can read on screen, and speaking them would double
+    # the length of an already long readout.
+    asked = []
+    for q in questions[:4]:
+        if not isinstance(q, dict):
+            continue
+        options = [str(o.get("label") or "").strip()
+                   for o in (q.get("options") or []) if isinstance(o, dict)]
+        asked.append({"q": str(q.get("question") or "").strip(),
+                      "options": [o for o in options if o][:4]})
     project = os.path.basename(payload.get("cwd") or "") or "unknown"
     title = session_name(session_id)
     rec = {"tty": tty, "term": os.environ.get("TERM_PROGRAM") or "",
            "session": session_id, "ts": int(time.time()),
            "owner_pid": owner_pid, "project": project,
            "headers": [h for h in headers if h],
+           "questions": [a for a in asked if a["q"]],
            "name": humanize(title) if title else speak_name(project)}
     try:
         os.makedirs(ASKING_DIR, exist_ok=True)
@@ -974,6 +1020,89 @@ def speak_ask(rec):
     text = f"{rec.get('name') or 'Claude'}: waiting on your call"
     text += f". {what}." if what else "."
     proc = subprocess.Popen(["/usr/bin/say", text],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
+    try:
+        with open(PID_FILE, "w") as f:
+            f.write(str(proc.pid))
+    except OSError:
+        pass
+
+
+ASK_ORDINALS = ("one", "two", "three", "four")
+
+
+def speak_ask_on_focus(tty, rec):
+    """You clicked into a terminal holding an open question — read it out.
+
+    The one state that means YOU are the blocker was also the only one you
+    could not hear on demand: speak_ask() fires once, unfocused, and reads
+    headers only, so clicking in just dropped the tint and said nothing.
+    This is the click-to-talk that summaries already have, and it reads the
+    questions in full plus their option LABELS — the labels are the answers
+    you are choosing between; the descriptions are on screen.
+
+    Deliberately NOT gated by `hold`, unlike speak_ask(): that setting
+    governs unprompted speech at a terminal you are not watching, and a
+    click-in is the opposite of unprompted — the same reasoning that leaves
+    speak_on_focus() ungated. It IS gated by focus_speak, which means "no
+    click-to-talk" and covers questions as much as summaries.
+
+    Stops after `ask_reads` reads: past that the question has been in front
+    of you for a while and repeating it is nagging. The purple tab still
+    returns on every switch away, because that reflects the question being
+    open, not unheard.
+    """
+    session_id = rec.get("session")
+    if resolve_mode(session_id) == "off":
+        return
+    if resolve_setting(session_id, "ask_speak", ("on", "off"), "on") == "off":
+        return
+    if resolve_setting(session_id, "focus_speak", ("on", "off"), "on") == "off":
+        return
+    if on_call() or active_say_pid() is not None:
+        return
+    questions = [q for q in (rec.get("questions") or []) if isinstance(q, dict)]
+    if not questions:
+        return  # an older marker, written before questions were stored
+    reads = rec.get("reads")
+    if not isinstance(reads, int) or isinstance(reads, bool) or reads < 0:
+        reads = 0
+    if reads >= resolve_ask_reads(session_id):
+        return
+    parts = []
+    for i, q in enumerate(questions):
+        text = str(q.get("q") or "").strip()
+        if not text:
+            continue
+        if len(questions) > 1 and i < len(ASK_ORDINALS):
+            text = f"Question {ASK_ORDINALS[i]}: {text}"
+        if text[-1] not in ".?!":
+            text += "."
+        options = [str(o).strip() for o in (q.get("options") or []) if str(o).strip()]
+        if options:
+            text += " Options: " + "; ".join(options) + "."
+        parts.append(text)
+    if not parts:
+        return
+    spoken = f"{rec.get('name') or 'Claude'} is asking. " + " ".join(parts)
+    # Claim the read before speaking. The watcher is the only writer of
+    # this field, so no locking — but re-read anyway and leave it alone if
+    # the marker has been replaced, so a question that opened in the last
+    # instant does not start life having spent one of its reads.
+    try:
+        with open(_ask_path(tty)) as f:
+            latest = json.load(f)
+    except (OSError, ValueError):
+        latest = None
+    if isinstance(latest, dict) and latest.get("ts") == rec.get("ts"):
+        latest["reads"] = reads + 1
+        try:
+            with open(_ask_path(tty), "w") as f:
+                json.dump(latest, f)
+        except OSError:
+            pass
+    proc = subprocess.Popen(["/usr/bin/say", spoken],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
     try:
@@ -1148,6 +1277,7 @@ def watch():
     # start talking at you the moment a summary lands in it.
     last_focus = focused_tty()
     owed = None
+    ask_owed = None
     badge_cleared = False
     while True:
         entries = load_queue()
@@ -1217,6 +1347,11 @@ def watch():
             # tried here and was wrong: real summaries routinely wait far
             # longer than a few minutes before you get back to them.)
             owed = focus if focus in waiting else None
+            # An open question owes you a read on the same terms. This has
+            # to hang off the TRANSITION, not the asking loop above, which
+            # runs every poll — put it there and the question re-reads
+            # itself every 1.5 seconds for as long as it stays open.
+            ask_owed = focus if focus in asking else None
             last_focus = focus
         if owed and owed in waiting and active_say_pid() is None and not on_call():
             ready = [e for e in waiting[owed]
@@ -1225,14 +1360,36 @@ def watch():
             if ready:
                 speak_on_focus(owed, ready)
             owed = None  # paid up: it stays quiet until you come back again
+        if ask_owed and ask_owed in asking and active_say_pid() is None \
+                and not on_call():
+            speak_ask_on_focus(ask_owed, asking[ask_owed])
+            ask_owed = None
         time.sleep(WATCH_POLL_SECS)
 
 
 def speak_on_focus(tty, queued):
-    """You looked at the terminal — read it what it has been holding."""
+    """You looked at the terminal — read it what it has been holding.
+
+    Only the newest `recap_max` are spoken, oldest-first inside that window
+    so the final words you hear are the current state. Anything older is
+    counted out loud up front ("8 older updates skipped") rather than read
+    — a long session's backlog is mostly stale by the time you get back to
+    it. Skipped entries are still marked played along with the rest, so the
+    tab clears in one click instead of handing you the same wall next time;
+    `repeat 10` / `repeat 30m` ignore the played flag and are the way back
+    to them.
+    """
+    # Resolved against the NEWEST entry — that is the session you clicked
+    # into, and the one whose per-session setting should decide.
+    n = resolve_recap_max(queued[-1].get("session"))
+    window = queued[-n:]
     text = " ... Next. ".join(
         f"{e.get('name') or speak_name(e.get('project') or '')}: {e.get('text')}"
-        for e in queued)
+        for e in window)
+    skipped = len(queued) - len(window)
+    if skipped:
+        text = (f"{skipped} older update{'' if skipped == 1 else 's'} skipped. "
+                + text)
     stamps = {(e.get("ts"), e.get("text")) for e in queued}
     entries = load_queue()
     for e in entries:  # claim before speaking, so nobody doubles up
@@ -1241,7 +1398,7 @@ def speak_on_focus(tty, queued):
     if not save_queue(entries):
         return
     tint_stop(tty)
-    badge("🔊 " + (queued[0].get("name") or ""), queued[0].get("session"))
+    badge("🔊 " + (window[0].get("name") or ""), window[0].get("session"))
     proc = subprocess.Popen(["/usr/bin/say", text],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
@@ -1250,8 +1407,8 @@ def speak_on_focus(tty, queued):
             f.write(str(proc.pid))
     except OSError:
         pass
-    rgb = resolve_tab_color(queued[0].get("session"))
-    if tint_start(tty, queued[0].get("term"), rgb, proc.pid):
+    rgb = resolve_tab_color(window[0].get("session"))
+    if tint_start(tty, window[0].get("term"), rgb, proc.pid):
         spawn_untinter(tty)
 
 

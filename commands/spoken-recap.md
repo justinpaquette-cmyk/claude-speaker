@@ -4,7 +4,7 @@ When multiple sessions finish while one is already talking, their summaries queu
 
 ## Usage
 
-- `/spoken-recap` — speak this session's unplayed summaries oldest-first
+- `/spoken-recap` — speak the newest few of this session's unplayed summaries oldest-first (`recap_max`, default 3), counting the rest ("8 older updates skipped") and marking them all played
 - `/spoken-recap latest` — re-speak this session's most recent summary (played or not)
 - `/spoken-recap 3` — pop the last 3 updates off the stack, played or not (any number)
 - `/spoken-recap 5m` — pop the last 5 minutes (`s` / `m` / `h`)
@@ -21,5 +21,5 @@ When multiple sessions finish while one is already talking, their summaries queu
 2. Run `python3 ~/.claude/scripts/tts-recap.py` with:
    - `--session <id>` unless `all` was given
    - `--latest` for `latest`, `--status` for `status`
-   - `--last <n>` for a bare number, `--since <seconds>` for a duration (convert the unit yourself: `5m` → `--since 300`). These two ignore the played flag on purpose — "the last 3" means the last 3 — and mark what they read as played.
+   - `--last <n>` for a bare number, `--since <seconds>` for a duration (convert the unit yourself: `5m` → `--since 300`). These two ignore the played flag on purpose — "the last 3" means the last 3 — and mark what they read as played. They are also **not** capped by `recap_max`, which makes them the way to hear whatever a bare recap skipped.
 3. Relay the script's stdout to the user verbatim (it lists what was spoken/queued). Do not add a 🔊 line to your reply — the recap itself is the speech, and a marker line would immediately queue behind it.
