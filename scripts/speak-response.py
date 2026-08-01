@@ -84,7 +84,13 @@ import subprocess
 import sys
 import time
 
-CLAUDE_DIR = os.path.expanduser("~/.claude")
+# Every path below hangs off this, so pointing CLAUDE_DIR at a temp dir
+# gives you a complete, isolated instance: its own queue, state, tints,
+# locks and pid file, touching nothing live. That is the difference
+# between a change you can test and a change you can only ship — the
+# alternative is commandeering the real queue and the real terminals,
+# which is why edits used to gravitate to the installed copy instead.
+CLAUDE_DIR = os.environ.get("CLAUDE_DIR") or os.path.expanduser("~/.claude")
 PID_FILE = os.path.join(CLAUDE_DIR, "scripts", ".speak-response.pid")
 STATE_FILE = os.path.join(CLAUDE_DIR, "tts-state.json")
 SESSION_DIR = os.path.join(CLAUDE_DIR, "tts-sessions")
@@ -372,8 +378,8 @@ def speak_name(project):
 
 def session_name(session_id):
     """The session's title — /rename or Claude Code's auto title — from the
-    live registry (~/.claude/sessions/<pid>.json), newest entry wins."""
-    sess_dir = os.path.expanduser("~/.claude/sessions")
+    live registry (<CLAUDE_DIR>/sessions/<pid>.json), newest entry wins."""
+    sess_dir = os.path.join(CLAUDE_DIR, "sessions")
     best, best_ts = None, -1
     try:
         files = os.listdir(sess_dir)

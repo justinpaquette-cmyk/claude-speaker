@@ -25,8 +25,11 @@ def session_filter():
             pass
     return None
 
-QUEUE_FILE = os.path.expanduser("~/.claude/tts-queue.jsonl")
-PID_FILE = os.path.expanduser("~/.claude/scripts/.speak-response.pid")
+# Overridable so the three scripts can be exercised against a scratch
+# directory instead of the live queue. All three read the same variable.
+CLAUDE_DIR = os.environ.get("CLAUDE_DIR") or os.path.expanduser("~/.claude")
+QUEUE_FILE = os.path.join(CLAUDE_DIR, "tts-queue.jsonl")
+PID_FILE = os.path.join(CLAUDE_DIR, "scripts", ".speak-response.pid")
 KEEP = 200
 
 
@@ -59,7 +62,7 @@ def speak_name(project):
     """Spoken form of a project name: custom name from tts-state.json's
     "names" map if set, else camelCase/dashes split into words."""
     try:
-        with open(os.path.expanduser("~/.claude/tts-state.json")) as f:
+        with open(os.path.join(CLAUDE_DIR, "tts-state.json")) as f:
             names = json.load(f).get("names") or {}
         if project in names:
             return names[project]

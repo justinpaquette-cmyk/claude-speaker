@@ -44,8 +44,12 @@ import os
 import subprocess
 import sys
 
-RECAP = os.path.expanduser("~/.claude/scripts/tts-recap.py")
-PID_FILE = os.path.expanduser("~/.claude/scripts/.speak-response.pid")
+# Overridable so the three scripts can be exercised against a scratch
+# directory instead of the live queue and the real terminals. All three
+# read the same variable, so one export isolates the whole tool.
+CLAUDE_DIR = os.environ.get("CLAUDE_DIR") or os.path.expanduser("~/.claude")
+RECAP = os.path.join(CLAUDE_DIR, "scripts", "tts-recap.py")
+PID_FILE = os.path.join(CLAUDE_DIR, "scripts", ".speak-response.pid")
 
 
 def busy():
@@ -86,7 +90,7 @@ TRIGGERS.update({
             # THE VOICE IS TALKING; otherwise it falls through and is
             # handled as the instruction it plainly was.
             "stop": "stop-if-speaking"})
-SPEAKER = os.path.expanduser("~/.claude/scripts/speak-response.py")
+SPEAKER = os.path.join(CLAUDE_DIR, "scripts", "speak-response.py")
 
 
 def speaker_module():
