@@ -417,7 +417,7 @@ def resolve_tab_color(session_id):
 def resolve_ask_color(session_id):
     """RGB to tint a terminal holding an open question, or None if off.
 
-    `ask_color` per-session > global > "orange". Same grammar as
+    `ask_color` per-session > global > "purple". Same grammar as
     `tab_color`, so `/tts ask_color off` drops the cue without touching
     the speaking/waiting colors.
     """
@@ -840,7 +840,7 @@ def live_asks():
 
     A marker whose session process is gone (or that nothing closed for a
     day) is dropped here — that is what stops a killed session from
-    leaving a tab orange forever.
+    leaving a tab purple forever.
     """
     try:
         files = os.listdir(ASKING_DIR)
@@ -883,7 +883,7 @@ def ask_open(payload):
     Tinting and speaking happen only if that tab is NOT the one you are
     looking at — if it is, the question is already in front of you. The
     marker is written either way, so switching away later still turns the
-    tab orange (the watcher owns that transition).
+    tab purple (the watcher owns that transition).
 
     This runs as a PreToolUse hook, which BLOCKS the question from
     rendering until it returns: it does the cheap part (write the marker)
@@ -939,7 +939,7 @@ def ask_paint(tty, rec):
     if cur.get("state") == "speaking" and still_speaking(cur.get("pid")):
         return  # a live readout owns the tab; the marker outlives it
     if cur.get("shown") == list(rgb):
-        return  # already orange — every repaint is an osascript call
+        return  # already purple — every repaint is an osascript call
     tint_start(tty, rec.get("term") or os.environ.get("TERM_PROGRAM") or "",
                rgb, None, state="asking")
 
@@ -1032,11 +1032,26 @@ def restore_stale():
 
 
 def load_queue():
+    """Every readable entry. Parsed PER LINE on purpose: two hooks can
+    append concurrently and a large `full`-mode summary can exceed the
+    stream buffer, so a torn line is possible. Failing the whole file on
+    one bad line would make every waiting summary vanish at once — and
+    save_queue() would then write that empty list back, destroying the
+    real backlog. Skip the bad line, keep the rest (same as tts-recap.py).
+    """
+    entries = []
     try:
         with open(QUEUE_FILE, encoding="utf-8") as f:
-            return [json.loads(ln) for ln in f if ln.strip()]
-    except (OSError, ValueError):
+            for ln in f:
+                if not ln.strip():
+                    continue
+                try:
+                    entries.append(json.loads(ln))
+                except ValueError:
+                    continue
+    except OSError:
         return []
+    return entries
 
 
 def save_queue(entries):
@@ -1094,8 +1109,8 @@ def focused_tty():
 def watch():
     """Age the pending tints and read a terminal out when you look at it.
 
-    Also owns the orange ask cue: a terminal with an open question is
-    orange whenever it is in the BACKGROUND and its own color whenever you
+    Also owns the purple ask cue: a terminal with an open question is
+    purple whenever it is in the BACKGROUND and its own color whenever you
     are looking at it, so the tint follows focus for as long as the
     question stays open.
 
@@ -1103,11 +1118,23 @@ def watch():
     or a question is open, and exits as soon as both are clear, so nothing
     is polling in the background during normal use.
     """
-    try:
-        lock = open(WATCH_LOCK, "w")
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return  # another watcher already has it
+    # Retry rather than exit on contention. The outgoing watcher holds the
+    # lock through its own teardown (restore_stale() repaints, each an
+    # osascript with its own timeout), and a summary enqueued in exactly
+    # that window would otherwise find the lock held, exit here, and be
+    # left with no watcher at all: no tint, no aging, no read on focus,
+    # until some later Stop hook happened to spawn one. Waiting a few
+    # seconds costs a doomed child a few seconds; not waiting costs a
+    # summary its entire delivery.
+    for attempt in range(12):
+        try:
+            lock = open(WATCH_LOCK, "w")
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:  # BlockingIOError is an OSError
+            time.sleep(0.5)
+    else:
+        return  # a watcher really is running; it will pick this up
     term = os.environ.get("TERM_PROGRAM") or ""
     # A read is owed only when you CLICK INTO a waiting terminal — a
     # transition, not a state. Seeding last_focus with wherever you
@@ -1122,6 +1149,14 @@ def watch():
         asking = live_asks()
         if not waiting and not asking:
             restore_stale()  # clear any leftover pending/asking tints
+            # restore_stale() can take seconds (an osascript repaint per
+            # stranded tab), and the lock is still held throughout. Look
+            # once more before letting go: anything that arrived during
+            # teardown belongs to THIS watcher, because the hook that
+            # enqueued it already tried to spawn a replacement and found
+            # the lock held. Closing the window from both sides.
+            if pending_by_tty() or live_asks():
+                continue
             if active_say_pid() is None:
                 badge(None)
             return
@@ -1130,8 +1165,14 @@ def watch():
         if active_say_pid() is None:  # a live readout owns the badge instead
             if waiting:
                 oldest = min(e.get("ts", now) for q in waiting.values() for e in q)
-                stage = next(c for t, c in reversed(WAIT_STAGES)
-                             if now - oldest >= t)
+                # Default matters: a clock step backwards (sleep/wake, NTP)
+                # makes `now - oldest` negative, matching no stage. Without
+                # a fallback that raises StopIteration out of watch(), and
+                # the `finally: sys.exit(0)` masks it as a clean exit — the
+                # watcher just dies and tints stop aging. wait_color() has
+                # always defaulted to green here; match it.
+                stage = next((c for t, c in reversed(WAIT_STAGES)
+                              if now - oldest >= t), WAIT_STAGES[0][1])
                 n = sum(len(q) for q in waiting.values())
                 badge(f"{STAGE_EMOJI[stage]} {n} waiting")
                 badge_cleared = False
@@ -1139,7 +1180,7 @@ def watch():
                 # Only questions left — nothing is "waiting to be read".
                 badge(None)
                 badge_cleared = True
-        # Open questions first: orange while backgrounded, dropped the
+        # Open questions first: purple while backgrounded, dropped the
         # moment you look at the tab. The marker survives either way, so
         # switching back and forth just repaints.
         for tty, rec in asking.items():
@@ -1490,7 +1531,7 @@ def main():
         # notice when you're deep in something, not enough to pull you out
         # of it. It reads out when you click into the terminal.
         spawn_watch()
-        chime(after_pid=busy_pid)
+        chime(after_pid=busy_pid, session_id=session_id)
         notify(entry["name"], spoken, session_id)
         return
     if busy_pid is not None:
