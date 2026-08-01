@@ -483,18 +483,29 @@ end tell''',
 }
 
 
+def frontmost_app():
+    """Name of the app that currently owns the keyboard, or ""."""
+    return _osascript('tell application "System Events" to return name of '
+                      "first application process whose frontmost is true")
+
+
 def raise_window(tty, term):
     """Bring the speaking terminal's window to the top of the stack.
 
-    Uses System Events' AXRaise, which reorders the window in place and
-    leaves keyboard focus exactly where it was. Deliberately NOT
-    `activate` — that would yank focus out of whatever you are typing in.
-    Needs Accessibility permission for the terminal app; without it this
-    silently does nothing (`speak-response.py --check-raise` says so).
+    Two rules keep the keyboard where it is. `activate` is never used —
+    it would yank focus out of another app. And AXRaise, which does not
+    cross apps, still makes the raised window KEY within its own app, so
+    it is skipped entirely whenever the terminal app is already frontmost:
+    if you are typing in any terminal window, nothing moves. The raise
+    only fires when your attention is elsewhere, which is the case it is
+    for. Needs Accessibility permission for the terminal app; without it
+    this silently does nothing (`speak-response.py --check-raise` says so).
     """
     proc = AX_PROCESS.get(term)
     if not proc or not tty:
         return False
+    if frontmost_app() == proc:
+        return False  # you're typing in a terminal — never pull the rug
     return _osascript(f'''{RAISE_SCRIPT[term] % {"tty": tty}}
 if idx is 0 then return "no-window"
 tell application "System Events" to tell process "{proc}"

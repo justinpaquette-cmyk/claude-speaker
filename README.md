@@ -44,7 +44,7 @@ Nothing to do — responses just speak. Control it with two slash commands:
 While a summary is being read, that terminal **turns red** and its window is **raised to the top** — then the color goes right back to normal when the voice stops. With several sessions running you can look up mid-sentence and know which one is speaking.
 
 - **Tint** — Terminal.app tab background (AppleScript, matched by tty) or iTerm2 tab color (OSC 6). Any other emulator just skips the tint and still speaks. `/tts color <red|orange|yellow|green|blue|purple|#rrggbb|off>`.
-- **Raise** — System Events `AXRaise`, which reorders the window *without* taking keyboard focus, so it never interrupts what you're typing in another app. `activate` is deliberately never used. `/tts raise off` disables it.
+- **Raise** — System Events `AXRaise`, never `activate` (which would yank focus out of another app). AXRaise doesn't cross apps, but it *does* make the raised window key inside its own app — so the raise is **skipped whenever your terminal app is frontmost**. If you're typing in a terminal window, nothing moves; the raise only fires when you're off in another app. `/tts raise off` turns it off entirely.
 - Raising needs **Accessibility** permission for your terminal app (System Settings → Privacy & Security → Accessibility). Without it the raise silently does nothing; `python3 ~/.claude/scripts/speak-response.py --check-raise` tells you which state you're in.
 - The pre-speech color is parked in `~/.claude/tts-tabcolor/<tty>.json`, so a killed watcher can't leave a terminal stuck red — the next hook run puts it back.
 

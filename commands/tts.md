@@ -20,9 +20,10 @@ Control the Stop-hook TTS (`~/.claude/scripts/speak-response.py`). Two settings:
 - `off` — never tint this terminal
 
 **Raise** — whether the speaking terminal's window comes to the top:
-- `window` (default) — raise it in place; keyboard focus never moves, so typing
-  in another app is not interrupted. Needs Accessibility permission for the
-  terminal app (Terminal.app or iTerm2 only).
+- `window` (default) — raise it in place, never taking the keyboard. Skipped
+  entirely while the terminal app is frontmost, so if you're typing in a
+  terminal window nothing moves; it only fires when your attention is
+  elsewhere. Needs Accessibility permission (Terminal.app or iTerm2 only).
 - `off` — leave window stacking alone; the tint is the only cue.
 
 **Collision** — what happens when another session's voice is already talking:
