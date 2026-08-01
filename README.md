@@ -16,7 +16,7 @@ git clone https://github.com/justinpaquette-cmyk/claude-speaker.git && cd claude
 
 Then restart your Claude Code sessions (or open `/hooks` once in each running one). That's it — the next response you get will end with a spoken summary.
 
-The installer is idempotent and merge-safe: it copies two Python scripts into `~/.claude/scripts/`, two slash commands into `~/.claude/commands/`, appends a Stop hook to your existing `~/.claude/settings.json` (never overwriting other settings), and appends a short convention to your `~/.claude/CLAUDE.md` telling Claude to end responses with a `🔊 one-liner` for the voice to read.
+The installer is idempotent and merge-safe: it copies three Python scripts into `~/.claude/scripts/`, three slash commands into `~/.claude/commands/`, compiles two small helpers (the mic/camera detector and the menu-bar indicator), adds a `Stop` and a `UserPromptSubmit` hook to your existing `~/.claude/settings.json` (never overwriting other settings), and appends a short convention to your `~/.claude/CLAUDE.md` telling Claude to end responses with a `🔊 one-liner` for the voice to read.
 
 ## Usage
 
@@ -37,14 +37,15 @@ Nothing to do — responses just speak. Forgotten what's available? **`/tts-wiza
 | `/tts menubar <on\|off>` | Menu-bar indicator (default `on`) |
 | `/tts notify <on\|off>` | Banner for summaries that had to wait (default `on`) |
 | `/tts raise <window\|off>` | Opt-in: raise the speaking window (default `off`) |
-
-**What the voice calls a terminal:** its session title — set one with Claude Code's built-in `/rename` (auto titles work too) — else the `/tts name` custom name, else the project folder name. Titles and folder names are humanized for speech (camelCase/dashes split into words).
-| `repeat` / `rr` | Replay the last summary — **no model turn, no tokens** (see below) |
 | `/tts collision hold` | Never speak unprompted: chime, color, wait for a click |
 | `/tts chime <on\|off>` | The soft arrival tone (default `on`) |
+| `repeat` / `rr` | Replay the last summary — **no model turn, no tokens** (see below) |
+| `shh` | Stop the voice mid-sentence |
 | `/spoken-recap` | Replay this session's queued summaries |
 | `/spoken-recap status` | List this session's queue without speaking |
 | `/spoken-recap all` | Replay queued summaries from every session |
+
+**What the voice calls a terminal:** its session title — set one with Claude Code's built-in `/rename` (auto titles work too) — else the `/tts name` custom name, else the project folder name. Titles and folder names are humanized for speech (camelCase/dashes split into words).
 
 ## Missed it? `repeat` — free replay
 
