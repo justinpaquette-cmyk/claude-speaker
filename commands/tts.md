@@ -26,9 +26,9 @@ Control the Stop-hook TTS (`~/.claude/scripts/speak-response.py`). Two settings:
 **Focus** — `focus_speak` (default `on`): **being at** a waiting terminal makes
 it read out and clear its color — either by clicking into it, or by a summary
 landing in the tab you are already watching (in `hold`, that is the one thing
-that speaks unprompted). Red is the cutoff: past 5 minutes a waiting summary
-has gone stale and stays quiet on a click-in, so hour-old backlog never starts
-talking. `/tts focus off` leaves everything waiting for `rr` or `/spoken-recap`.
+that speaks unprompted). A click-in reads out whatever the terminal holds, at
+any age — a colored tab is one you have not heard yet.
+`/tts focus off` leaves everything waiting for `rr` or `/spoken-recap`.
 
 **Ask** — the purple "you are the blocker" cue, the only one that means a session
 is stopped waiting on you rather than holding something for you (off the

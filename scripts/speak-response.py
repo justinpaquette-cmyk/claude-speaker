@@ -57,10 +57,8 @@ and it goes purple; switch back and the tint drops (the question stays open
 either way). When it first opens unfocused, the question's headers are read
 aloud (`ask_speak`), so you know what is being asked without looking. Both
 off via `/tts ask_color off` / `/tts ask_speak off`.
-Focus a waiting terminal and it reads out on the spot, then goes back to
-its own color — until it goes red, at which point it has stopped chasing
-you: it keeps its color and waits for `repeat` or /spoken-recap, so
-landing on a tab holding hour-old backlog never starts a readout.
+Focus a waiting terminal and it reads out on the spot, whatever its age,
+then goes back to its own color.
 The aging and the focus read are done by a single locked
 watcher (`speak-response.py --watch`) that starts when something first
 has to wait and exits as soon as the queue is clear — nothing polls in
@@ -103,14 +101,6 @@ DEFAULT_TAB_COLOR = "blue"  # while actually speaking
 # ready to talk, yellow once it has been waiting a while, red once it has
 # been waiting a long time. Focus the terminal and it reads out.
 WAIT_STAGES = ((0, "green"), (30, "yellow"), (300, "red"))
-# How old a waiting summary may be and still read itself out when you switch
-# into its terminal. Deliberately the red threshold: green and yellow are
-# "still relevant, catch up"; red is stale, and a stale summary that starts
-# talking because you happened to click that tab is worse than silence — it
-# waits for `repeat` / /spoken-recap instead. A summary arriving in the
-# terminal you are already looking at is exempt: it is seconds old by
-# construction (see main()).
-FOCUS_READ_WINDOW_SECS = WAIT_STAGES[-1][0]
 # An open AskUserQuestion: the session is blocked on Justin, not the other
 # way round. Deliberately off the green→yellow→red ladder so it reads as a
 # different KIND of state, not a further stage of waiting. Static (a
@@ -1172,15 +1162,14 @@ def watch():
                            state="pending")
         if focus != last_focus:
             # You just switched terminals. If you landed on one that is
-            # holding something RECENT, it owes you a read. Past the stale
-            # window (red) it does not: backlog from an hour ago must never
-            # start talking just because you happened to click that tab —
-            # it keeps its color and waits for `repeat` / /spoken-recap.
-            # Arming is per-switch-in, so one fresh arrival re-arms the
-            # terminal and clears whatever else it was holding with it.
-            owed = focus if focus in waiting and any(
-                now - e.get("ts", now) <= FOCUS_READ_WINDOW_SECS
-                for e in waiting[focus]) else None
+            # holding something, it owes you a read — at ANY age. Clicking
+            # a waiting terminal is an explicit ask, and a summary that is
+            # still colored is a summary you have not heard; refusing to
+            # read it because it has been sitting a while just leaves a
+            # colored tab that nothing will ever clear. (An age cutoff was
+            # tried here and was wrong: real summaries routinely wait far
+            # longer than a few minutes before you get back to them.)
+            owed = focus if focus in waiting else None
             last_focus = focus
         if owed and owed in waiting and active_say_pid() is None and not on_call():
             ready = [e for e in waiting[owed]

@@ -31,7 +31,7 @@ ls -t ~/.claude/projects/<encoded-cwd>/*.jsonl | head -1   # cwd, / and spaces �
    | Feature | What it does |
    |---|---|
    | **Delivery** (`collision`) | `chime` speak now if the voice is free, else chime and wait · `follow` waiting summaries auto-read in finish order · `hold` nothing speaks at a terminal you're not watching — chime, color the tab, wait to be clicked into; a summary landing in the focused tab still reads out |
-   | **Click-to-talk** (`focus_speak`) | Being at a waiting terminal reads it out — clicking in, or a summary arriving in the tab you're already watching. Past red (5min) it's stale and stays quiet, so old backlog never starts talking |
+   | **Click-to-talk** (`focus_speak`) | Being at a waiting terminal reads it out — clicking in, or a summary arriving in the tab you're already watching. Any age: a colored tab is one you haven't heard |
    | **Colors** (`tab_color`) | 🔵 speaking · 🟢 waiting · 🟡 over 30s · 🔴 over 5min. The speaking color is settable; the waiting ladder is fixed. `off` disables tinting |
    | **Question cue** (`ask_color`, `ask_speak`) | 🟣 an AskUserQuestion is open — the one color that means *you* are the blocker. Background tabs only (the tab you're in already shows the question), outranks the waiting ladder, never ages. `ask_speak` reads the question's headers aloud when it opens unfocused — silent under `hold`, which means nothing speaks at a terminal you aren't watching |
    | **Menu bar** (`menubar`) | Top bar shows `🔊 <terminal>` speaking or `🟡 2 waiting` |

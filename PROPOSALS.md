@@ -224,14 +224,15 @@ the wizard), for a knob with no demonstrated demand.
 **Why it matters.** It doesn't. This was considered and rejected during the
 build: a summary chimes once on arrival and then only changes color. Nagging is
 worse than silence — the tool's whole posture is that it never takes your focus,
-and a repeating tone is exactly a focus grab. The freshness rule that just
-shipped moves in the *opposite* direction — a summary past red no longer reads
-itself out on a click-in. (Not "stops chasing you entirely," as an earlier draft
-of this said: the watcher arms on any *fresh* entry for that terminal and then
-reads out everything it holds, stale included, and the red tab persists until
-something clears it. The real gap, if one is worth closing, is at the far end:
-after `WATCH_MAX_AGE_SECS` a summary is dropped from the queue having never been
-surfaced by any cue.)
+and a repeating tone is exactly a focus grab.
+
+An earlier draft of this section leaned on a freshness cutoff that stopped
+click-in reads for summaries past red. That cutoff was tried and reverted the
+same session: real summaries routinely wait far longer than five minutes before
+you get back to them, so it broke the click-to-talk feature outright. The gap
+worth watching is at the *other* end — after `WATCH_MAX_AGE_SECS` a summary is
+dropped from the queue having never been surfaced by any cue. If summaries ever
+do get missed, that is where to look, not at chimes.
 
 **Rough cost.** An hour.
 

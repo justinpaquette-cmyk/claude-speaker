@@ -117,8 +117,10 @@ Not proposals — these shipped while the review was running.
 
 - **Focus fix** (`071afc2`) — with `collision=hold`, a summary landing in the
   terminal you're watching now speaks on the spot instead of making you click off
-  and back. Unfocused is unchanged. Switch-in reads now ignore anything older
-  than the red threshold, so hour-old backlog never starts talking.
+  and back. Unfocused is unchanged. A freshness cutoff on click-in reads shipped
+  with it and was **reverted the same session** — it broke the core feature
+  (clicking a waiting terminal stopped reading anything over 5 minutes old, which
+  is most of them in real use). Click-in now reads out at any age, as before.
 - **Ask cue backported + put under `hold`** (`796d94e`) — the announcer checked
   mode, `ask_speak`, calls and a busy voice, but never `collision`, and the docs
   called that deliberate. That's how an unfocused JustinBot talked at you with
