@@ -12,14 +12,18 @@ disagreed with.
 **Research** = the answer changes whether it's worth building · **Kill** = not
 worth it unless someone asks · **Defer** = right idea, wrong time.
 
-Baseline for the cost estimates: 1,940 lines across three Python scripts, a C
-helper and a Swift helper. Zero tests. No CI.
+Baseline for the cost estimates: 1,838 lines across three Python scripts, a C
+helper and a Swift helper, plus a 102-line installer. Zero tests. No CI.
+
+**Reviewed.** Fable reviewed this list adversarially and disagreed with five of
+the calls; the corrections are folded in below and the outcome is in
+[VERDICT.md](VERDICT.md), which is the page to read first.
 
 ---
 
 ## 1. Test suite + `CLAUDE_DIR` env override
 
-**What.** Replace the 15 hardcoded `~/.claude` paths across the three Python
+**What.** Replace the 8 hardcoded `~/.claude` paths across the three Python
 scripts with a single `CLAUDE_DIR = os.environ.get("CLAUDE_DIR", ...)`, then add
 pytest coverage for the pure logic (`sanitize`, `pick_speech`, `_trim`,
 `adaptive_cap`, `wait_color`, `parse_color`, the settings-resolution ladder) and
@@ -35,8 +39,10 @@ monkeypatched module globals — which worked, but only because the harness coul
 reach in and reassign them. The next person changing the wait ladder or the
 collision branches gets no such affordance.
 
-**Rough cost.** Half a day. The env override is a mechanical change (~15 call
-sites, all module-level constants). The tests are where the time goes; the pure
+**Rough cost.** Half a day. The env override is nearly free — `speak-response.py`
+already centralizes on `CLAUDE_DIR`, so it is that line plus the stray
+`~/.claude/sessions` inside `session_name()`, plus 6 sites in the other two
+scripts. The tests are where the time goes; the pure
 functions are trivial, `main()` needs a fixture that fakes a transcript and stubs
 `say`/`osascript`/`afplay`.
 
@@ -218,9 +224,14 @@ the wizard), for a knob with no demonstrated demand.
 **Why it matters.** It doesn't. This was considered and rejected during the
 build: a summary chimes once on arrival and then only changes color. Nagging is
 worse than silence — the tool's whole posture is that it never takes your focus,
-and a repeating tone is exactly a focus grab. Note that the freshness rule just
-shipped moves in the *opposite* direction: a summary that ages past red now stops
-chasing you entirely.
+and a repeating tone is exactly a focus grab. The freshness rule that just
+shipped moves in the *opposite* direction — a summary past red no longer reads
+itself out on a click-in. (Not "stops chasing you entirely," as an earlier draft
+of this said: the watcher arms on any *fresh* entry for that terminal and then
+reads out everything it holds, stale included, and the red tab persists until
+something clears it. The real gap, if one is worth closing, is at the far end:
+after `WATCH_MAX_AGE_SECS` a summary is dropped from the queue having never been
+surfaced by any cue.)
 
 **Rough cost.** An hour.
 
