@@ -1,39 +1,33 @@
 # claude-speaker 🔊
 
-**Your Claude Code terminals tell you when they're done — out loud, on-device, for free.**
-
-No API keys, no cloud TTS, no tokens. Built on Claude Code's hooks and the Mac's built-in `say`.
+**Claude Code speaks its results out loud.** Free, on-device, no API keys, no cloud TTS, no tokens.
 
 ```
-you: (working in Chrome)
-  🔊 "the docs terminal: Playwright is green, all 34 tests pass."
-  🔊 "retool bot: stopped — the migration needs a column you haven't created yet."
+🔊 "the docs terminal: Playwright is green, all 34 tests pass."
+🔊 "retool bot: stopped — the migration needs a column you haven't created yet."
 ```
 
-## Why
-
-Run four Claude Code sessions and you stop watching all four. You tab around hunting for the one that finished, and the one that got stuck sits there for ten minutes.
-
-Speech turns *"go check every terminal"* into *"I'll hear it when something finishes."* The Apple system voice runs entirely on-device, so it costs nothing and works offline.
-
-Then the problem becomes noise — four sessions all talking at once, or a voice cutting in while you're mid-thought. Most of this tool is the answer to that:
-
-- **One voice at a time.** Ever. Others queue.
-- **Nothing is lost.** A summary that couldn't be spoken waits, colors its terminal, and reads out when you go to it.
-- **It shuts up when you're on a call.** Mic or camera live → silence, not even a chime.
-- **`hold` mode** — nothing speaks unprompted at all. It chimes, colors the tab, and waits for you.
-
-## Install
+## Install in 30 seconds
 
 ```bash
 git clone https://github.com/justinpaquette-cmyk/claude-speaker.git && cd claude-speaker && ./install.sh
 ```
 
-Restart your Claude Code sessions (or open `/hooks` once in each running one). The next response you get will speak.
+Restart your Claude Code sessions and you're done — the next response speaks. One command, no config, no account, nothing to sign up for. Run **`/tts-wizard`** any time to see every feature with your current setting beside it and change it from a menu.
 
-The installer is idempotent and merge-safe. It copies three Python scripts to `~/.claude/scripts/` and three slash commands to `~/.claude/commands/`, compiles two small helpers (mic/camera detector, menu-bar indicator), adds a `Stop` and a `UserPromptSubmit` hook to your existing `~/.claude/settings.json` without touching anything else, and appends one convention to `~/.claude/CLAUDE.md` — end responses with a `🔊 one-liner` for the voice to read.
+*(The installer is idempotent and merge-safe: three scripts into `~/.claude/scripts/`, three slash commands into `~/.claude/commands/`, two small compiled helpers, and two hooks added to your existing `settings.json` without touching anything else.)*
 
-New here? Run **`/tts-wizard`**: it shows every feature with your current setting beside it and lets you pick a setup from menus.
+## What you get
+
+- 🗣️ **Spoken summaries** the moment a response finishes, in the macOS voice you already like.
+- 🎨 **Terminals that show their state in color** — 🔵 speaking · 🟢 waiting · 🟡 30s · 🔴 5min. A wall of terminals becomes readable at a glance.
+- 👆 **Click a waiting terminal and it reads out.** It only ever speaks on the switch-in, so the one you're sitting in stays quiet.
+- 🔁 **`repeat` replays anything — for free.** No model turn, no tokens, no context. `repeat full` gives you the entire response instead of the one-liner, also free.
+- 🤫 **`shh`** stops the voice mid-sentence.
+- 🎧 **Silent on calls.** Mic or camera live and it says nothing at all, chime included.
+- 🧘 **`hold` mode** — nothing ever speaks unprompted. It chimes, colors the tab, and waits until you're ready.
+- 📊 **Menu bar and notifications** carry the same state when every terminal is buried. Neither can take your focus.
+- 🔀 **Built for many sessions at once** — one voice at a time, ever, and nothing is ever lost or talked over.
 
 ## The terminal tells you what it wants
 
