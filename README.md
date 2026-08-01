@@ -15,7 +15,7 @@ git clone https://github.com/justinpaquette-cmyk/claude-speaker.git && cd claude
 
 Restart your Claude Code sessions and you're done — the next response speaks. One command, no config, no account, nothing to sign up for. Run **`/tts-wizard`** any time to see every feature with your current setting beside it and change it from a menu.
 
-*(The installer is idempotent and merge-safe: three scripts into `~/.claude/scripts/`, three slash commands into `~/.claude/commands/`, two small compiled helpers, and two hooks added to your existing `settings.json` without touching anything else.)*
+*(The installer is idempotent and merge-safe: three scripts into `~/.claude/scripts/`, three slash commands into `~/.claude/commands/`, two small compiled helpers, and four hooks added to your existing `settings.json` without touching anything else. An installed file you'd edited by hand is backed up to `<name>.bak-<timestamp>` rather than overwritten.)*
 
 ## What you get
 
@@ -68,7 +68,7 @@ Type **`repeat`** (or **`rr`**) and it plays again, costing nothing. A `UserProm
 
 | Type | What happens |
 |---|---|
-| `repeat` / `rr` | This session's most recent summary, again |
+| `repeat` | This session's most recent summary, again |
 | `repeat full` | **The whole response**, not the one-line summary |
 | `repeat inverse` | Whichever rendering you *didn't* get — full if you're in `summary` mode, summary if you're in `full` |
 | `repeat all` | Every session's unplayed summaries |
@@ -76,7 +76,7 @@ Type **`repeat`** (or **`rr`**) and it plays again, costing nothing. A `UserProm
 | `shh` / `hush` / `repeat stop` | Shut the voice up right now |
 | `stop` | Same — but only while the voice is talking; otherwise it's your prompt |
 
-Every `repeat …` form also works as `rr …`.
+**Five names, one command.** `rr`, `repeat`, `replay`, `recap` and `tts` each take that whole list — `rr full`, `replay full` and `recap full` are the same thing. A replay you can't remember the word for is a replay you don't use, and an alias costs one dict entry. The slash commands are untouched: `/tts`, `/recap` and `/spoken-recap` are never bare words, and `tts off` still reaches Claude, so configuring the voice works normally.
 
 `full` and `inverse` are free for the same reason: the hook payload carries this session's transcript path, so the turn is re-rendered from disk with the same sanitizer that spoke it. Heard the summary, want the detail? You get it without a model call.
 
@@ -144,6 +144,28 @@ Colors are Terminal.app tab backgrounds (AppleScript, matched by tty) or iTerm2 
 
 It also needs Accessibility permission (System Settings → Privacy & Security → Accessibility). Without it the raise silently does nothing; `speak-response.py --check-raise` tells you which state you're in.
 
+## Hacking on it: `--link` and `--check`
+
+The hooks never run this repo. They run `~/.claude/scripts/*.py`, the copy `install.sh` makes — so an edit to the file that *runs* is invisible to git, and an edit to the file in git changes nothing until you reinstall. Both have happened here, in the same afternoon: a fix committed to a file nothing executes, and ~290 lines of working, unversioned feature sitting in the installed copy one `install.sh` run from deletion.
+
+```bash
+./install.sh --link     # symlink the six managed files instead of copying
+./install.sh --check    # is what's running what's committed?
+```
+
+`--link` removes the second copy. There is one file: edits are live on the next hook invocation — every hook is a fresh process — and anything uncommitted shows up in `git status` like any other change. Nothing else moves, because no state rides on the script's location (every path hangs off `CLAUDE_DIR`) and the re-exec paths use `abspath(__file__)`, which doesn't resolve symlinks, so child processes still run through `~/.claude`.
+
+**It ties the hooks to this directory.** Move or rename the clone and they break silently — `--check` reports it as `BROKEN LINK`, and re-running `install.sh --link` from the new location repairs it. That's why plain copy stays the default; `--link` is for working on the tool, not for using it.
+
+`--check` reports `linked` / `identical` / `DRIFTED` / `BROKEN LINK` / `LINKED ELSEWHERE` / `MISSING` per file, compiles the three scripts, and exits nonzero on any of it. Under `--link` the compile pass is the part that matters: a syntax error in the repo is live the moment you save it. And in the copy path, an installed file that differs is saved to `<name>.bak-<timestamp>` before it's overwritten — drift is never silently destroyed, only ever set aside.
+
+Set **`CLAUDE_DIR`** to run the whole tool against a scratch directory — its own queue, state, tints, locks and pid file, touching nothing live:
+
+```bash
+mkdir -p /tmp/iso/scripts && ln -s "$PWD"/scripts/*.py /tmp/iso/scripts/
+CLAUDE_DIR=/tmp/iso python3 scripts/tts-recap.py --status
+```
+
 ## Tips
 
 - The voice is whatever macOS is set to — the newer **Siri voices** sound far better than the default. System Settings → Accessibility → Spoken Content → System voice.
@@ -163,10 +185,10 @@ rm ~/.claude/scripts/speak-response.py ~/.claude/scripts/tts-recap.py \
    ~/.claude/commands/tts.md ~/.claude/commands/tts-wizard.md \
    ~/.claude/commands/spoken-recap.md \
    ~/.claude/tts-state.json ~/.claude/tts-queue.jsonl
-rm -rf ~/.claude/tts-sessions ~/.claude/tts-tabcolor
+rm -rf ~/.claude/tts-sessions ~/.claude/tts-tabcolor ~/.claude/tts-asking
 ```
 
-Then remove the `Stop` and `UserPromptSubmit` entries from `~/.claude/settings.json` (or via `/hooks`), and the "Spoken Summary (TTS)" section from `~/.claude/CLAUDE.md`.
+Then remove the four entries that run these scripts from `~/.claude/settings.json` (or via `/hooks`) — one each under `Stop`, `UserPromptSubmit`, `PreToolUse` and `PostToolUse` — and the "Spoken Summary (TTS)" section from `~/.claude/CLAUDE.md`.
 
 ## License
 
