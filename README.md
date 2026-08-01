@@ -32,7 +32,9 @@ Nothing to do — responses just speak. Control it with two slash commands:
 | `/tts collision chime [global]` | Back to chime-and-queue (default) |
 | `/tts name <spoken name>` | Fallback spoken name for this project's terminals |
 | `/tts color <color\|off>` | Tint shown while this terminal speaks (default `blue`) |
-| `/tts focus <on\|off>` | Read out when you focus a waiting terminal (default `on`) |
+| `/tts focus <on\|off>` | Read out when you click into a waiting terminal (default `on`) |
+| `/tts menubar <on\|off>` | Menu-bar indicator (default `on`) |
+| `/tts notify <on\|off>` | Banner for summaries that had to wait (default `on`) |
 | `/tts raise <window\|off>` | Opt-in: raise the speaking window (default `off`) |
 
 **What the voice calls a terminal:** its session title — set one with Claude Code's built-in `/rename` (auto titles work too) — else the `/tts name` custom name, else the project folder name. Titles and folder names are humanized for speech (camelCase/dashes split into words).
@@ -64,7 +66,11 @@ Colors carry the state, so a wall of terminals is readable at a glance. Nothing 
 | 🟡 **yellow** | has been waiting over 30s |
 | 🔴 **red** | has been waiting over 5min |
 
-**Look at a waiting terminal and it reads out** — focus the tab, it speaks what it was holding, then goes back to its own color. So a session that couldn't talk (something else was speaking, or you were on a call) just sits there glowing until you glance at it.
+**Click into a waiting terminal and it reads out** — it speaks what it was holding, then goes back to its own color. So a session that couldn't talk (something else was speaking, or you were on a call) sits there glowing until you go to it.
+
+It triggers on the *switch-in*, not on the state: a terminal you're already sitting in never starts talking at you because a summary landed — you're looking right at it.
+
+Buried behind another app? The **menu bar** carries the same state (`🔊 the docs terminal` while speaking, `🟡 2 waiting` while held), and a summary that *couldn't* be spoken also raises a **notification banner**. Neither can take focus. `/tts menubar off`, `/tts notify off`.
 
 - Aging and focus-reads are handled by one locked watcher (`speak-response.py --watch`) that starts the moment something has to wait and **exits as soon as the queue is clear** — nothing polls in the background during normal use. It asks the terminal app for its own frontmost tab, so it needs no Accessibility permission.
 - **Tint** — Terminal.app tab background (AppleScript, matched by tty) or iTerm2 tab color (OSC 6). Any other emulator just skips the tint and still speaks. `/tts color <color|off>` sets the *speaking* color; the waiting ladder is fixed. `/tts focus off` keeps summaries waiting for `rr` instead of reading on focus.
@@ -114,6 +120,7 @@ State lives in `~/.claude/tts-state.json` (global mode) and `~/.claude/tts-sessi
 ```bash
 rm ~/.claude/scripts/speak-response.py ~/.claude/scripts/tts-recap.py \
    ~/.claude/scripts/repeat-hook.py ~/.claude/scripts/av-status \
+   ~/.claude/scripts/speaking-badge ~/.claude/tts-badge.txt \
    ~/.claude/commands/tts.md ~/.claude/commands/spoken-recap.md \
    ~/.claude/tts-state.json ~/.claude/tts-queue.jsonl
 rm -rf ~/.claude/tts-sessions ~/.claude/tts-tabcolor

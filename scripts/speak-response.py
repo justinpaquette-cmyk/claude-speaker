@@ -83,6 +83,9 @@ DEFAULT_TAB_COLOR = "blue"  # while actually speaking
 # been waiting a long time. Focus the terminal and it reads out.
 WAIT_STAGES = ((0, "green"), (30, "yellow"), (300, "red"))
 WATCH_LOCK = os.path.join(CLAUDE_DIR, "scripts", ".tts-watch.lock")
+BADGE_FILE = os.path.join(CLAUDE_DIR, "tts-badge.txt")
+BADGE_HELPER = os.path.join(CLAUDE_DIR, "scripts", "speaking-badge")
+STAGE_EMOJI = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
 WATCH_POLL_SECS = 1.5
 WATCH_MAX_AGE_SECS = 86400  # forget pending entries older than a day
 # Every color this tool ever paints. Used to recognize a tab we stranded
@@ -798,14 +801,27 @@ def watch():
     except OSError:
         return  # another watcher already has it
     term = os.environ.get("TERM_PROGRAM") or ""
+    # A read is owed only when you CLICK INTO a waiting terminal — a
+    # transition, not a state. Seeding last_focus with wherever you
+    # already are means the terminal you happen to be sitting in does not
+    # start talking at you the moment a summary lands in it.
+    last_focus = focused_tty()
+    owed = None
     while True:
         entries = load_queue()
         waiting = pending_by_tty(entries)
         if not waiting:
             restore_stale()  # clear any leftover pending tints
+            if active_say_pid() is None:
+                badge(None)
             return
         now = time.time()
         focus = focused_tty()
+        oldest = min(e.get("ts", now) for q in waiting.values() for e in q)
+        if active_say_pid() is None:  # a live readout owns the badge instead
+            stage = next(c for t, c in reversed(WAIT_STAGES) if now - oldest >= t)
+            n = sum(len(q) for q in waiting.values())
+            badge(f"{STAGE_EMOJI[stage]} {n} waiting")
         for tty, queued in waiting.items():
             rgb = wait_color(now - min(e.get("ts", now) for e in queued))
             rec = _read_restore(tty) or {}
@@ -816,12 +832,18 @@ def watch():
             if rec.get("shown") != list(rgb):
                 tint_start(tty, queued[0].get("term") or term, rgb, None,
                            state="pending")
-        if focus and focus in waiting and active_say_pid() is None and not on_call():
-            ready = [e for e in waiting[focus]
+        if focus != last_focus:
+            # You just switched terminals. If you landed on one that is
+            # holding something, it owes you a read.
+            owed = focus if focus in waiting else None
+            last_focus = focus
+        if owed and owed in waiting and active_say_pid() is None and not on_call():
+            ready = [e for e in waiting[owed]
                      if resolve_setting(e.get("session"), "focus_speak",
                                         ("on", "off"), "on") == "on"]
             if ready:
-                speak_on_focus(focus, ready)
+                speak_on_focus(owed, ready)
+            owed = None  # paid up: it stays quiet until you come back again
         time.sleep(WATCH_POLL_SECS)
 
 
@@ -838,6 +860,7 @@ def speak_on_focus(tty, queued):
     if not save_queue(entries):
         return
     tint_stop(tty)
+    badge("🔊 " + (queued[0].get("name") or ""), queued[0].get("session"))
     proc = subprocess.Popen(["/usr/bin/say", text],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
@@ -849,6 +872,51 @@ def speak_on_focus(tty, queued):
     rgb = resolve_tab_color(queued[0].get("session"))
     if tint_start(tty, queued[0].get("term"), rgb, proc.pid):
         spawn_untinter(tty)
+
+
+def badge(text, session_id=None):
+    """Show `text` in the menu bar, or clear it with None.
+
+    The state visible in the top bar even when every terminal is buried:
+    which one is speaking, or how many summaries are waiting. Writing the
+    file IS the API — the compiled helper mirrors it and quits when the
+    file goes away, so there is no daemon to manage.
+    """
+    if resolve_setting(session_id, "menubar", ("on", "off"), "on") == "off":
+        return
+    if text is None:
+        try:
+            os.remove(BADGE_FILE)
+        except OSError:
+            pass
+        return
+    if not os.access(BADGE_HELPER, os.X_OK):
+        return  # not built (no swiftc at install time) — nothing to show it
+    try:
+        with open(BADGE_FILE, "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError:
+        return
+    try:
+        running = subprocess.run(["pgrep", "-f", "speaking-badge"],
+                                 capture_output=True).stdout.strip()
+        if not running:
+            subprocess.Popen([BADGE_HELPER], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
+
+
+def notify(title, text, session_id=None):
+    """Banner for a summary that could NOT be spoken — you were on a call,
+    or another terminal was talking. Never for one you just heard, and
+    never focus-stealing: a banner cannot take the keyboard."""
+    if resolve_setting(session_id, "notify", ("on", "off"), "on") == "off":
+        return
+    body = text if len(text) <= 200 else text[:197].rsplit(" ", 1)[0] + "…"
+    esc = lambda s: s.replace("\\", "\\\\").replace('"', '\\"')
+    _osascript(f'display notification "{esc(body)}" with title '
+               f'"{esc(title)}" subtitle "waiting — focus the terminal to hear it"')
 
 
 def spawn_watch():
@@ -874,6 +942,10 @@ def untint(tty):
             break
         time.sleep(0.3)
     tint_stop(tty)
+    # The readout is over: drop the menu-bar badge, unless summaries are
+    # still waiting elsewhere — then the watcher owns it and repaints.
+    if not pending_by_tty():
+        badge(None)
 
 
 def spawn_drainer():
@@ -938,6 +1010,7 @@ def drain():
         except OSError:
             return
         prefix = entry.get("name") or speak_name(entry.get("project") or "")
+        badge("🔊 " + prefix, entry.get("session"))
         proc = subprocess.Popen(
             ["/usr/bin/say", f"{prefix}: {entry.get('text')}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -957,6 +1030,8 @@ def drain():
         proc.wait()
         if tinted:
             tint_stop(tty)
+        if not pending_by_tty():
+            badge(None)
 
 
 def main():
@@ -994,6 +1069,8 @@ def main():
                  "color": ("#%02x%02x%02x" % rgb) if rgb else "off",
                  "name": humanize(session_name(session_id) or "")
                          or speak_name(project)})
+        notify(humanize(session_name(session_id) or "") or speak_name(project),
+               spoken, session_id)
         spawn_watch()
         return
     busy_pid = active_say_pid()
@@ -1018,6 +1095,7 @@ def main():
         # summary is now unspoken and waiting, so the tab starts aging
         # green → yellow → red and reads out when you focus it.
         spawn_watch()
+        notify(entry["name"], spoken, session_id)
         if collision == "follow":
             # The summary speaks automatically right after the current
             # speech (and any earlier queued entries) — no chime.
@@ -1034,6 +1112,7 @@ def main():
         return
     # Name-prefixed on every path — immediate, drainer, /spoken-recap — so a
     # summary is always attributable to a terminal, contention or not.
+    badge("🔊 " + entry["name"], session_id)
     proc = subprocess.Popen(["/usr/bin/say", f"{entry['name']}: {spoken}"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)

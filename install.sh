@@ -31,6 +31,18 @@ else
   echo "WARNING: no C compiler (install Xcode Command Line Tools) — speech will play even during calls" >&2
 fi
 
+# Build the menu-bar indicator. Optional: without it, colors and speech
+# still work, there is just nothing in the top bar.
+if command -v swiftc >/dev/null 2>&1; then
+  if swiftc -O -o ~/.claude/scripts/speaking-badge "$REPO_DIR/scripts/speaking-badge.swift"; then
+    echo "Built ~/.claude/scripts/speaking-badge (menu-bar indicator)"
+  else
+    echo "WARNING: speaking-badge failed to build — no menu-bar indicator" >&2
+  fi
+else
+  echo "WARNING: no swiftc — no menu-bar indicator (everything else works)" >&2
+fi
+
 # Register the hooks in ~/.claude/settings.json (merge, never clobber).
 python3 - <<'PY'
 import json, os
