@@ -28,9 +28,11 @@ what happens to it:
   follow - same, except a waiting summary is spoken automatically right
            after the current speech ends (a locked drainer subprocess,
            `speak-response.py --drain`, serializes the readout)
-  hold   - never speak unprompted, even with the voice free: chime, color
-           the tab, and wait to be clicked into. For when you are deep in
-           something and a voice would break it.
+  hold   - never speak unprompted at a terminal you are not looking at:
+           chime, color the tab, and wait to be clicked into. For when you
+           are deep in something and a voice would break it. A summary
+           landing in the terminal that is focused RIGHT NOW still speaks
+           on the spot — being already there counts as being there.
 Any waiting summary can also be replayed with `repeat`/`rr` or
 /spoken-recap (scripts/tts-recap.py).
 If the mic or camera is
@@ -46,7 +48,10 @@ what it wants:
   yellow  - has been waiting over 30s
   red     - has been waiting over 5min
 Focus a waiting terminal and it reads out on the spot, then goes back to
-its own color. The aging and the focus read are done by a single locked
+its own color — until it goes red, at which point it has stopped chasing
+you: it keeps its color and waits for `repeat` or /spoken-recap, so
+landing on a tab holding hour-old backlog never starts a readout.
+The aging and the focus read are done by a single locked
 watcher (`speak-response.py --watch`) that starts when something first
 has to wait and exits as soon as the queue is clear — nothing polls in
 the background during normal use. Colors off via `/tts color off`, focus
@@ -87,6 +92,14 @@ DEFAULT_TAB_COLOR = "blue"  # while actually speaking
 # ready to talk, yellow once it has been waiting a while, red once it has
 # been waiting a long time. Focus the terminal and it reads out.
 WAIT_STAGES = ((0, "green"), (30, "yellow"), (300, "red"))
+# How old a waiting summary may be and still read itself out when you switch
+# into its terminal. Deliberately the red threshold: green and yellow are
+# "still relevant, catch up"; red is stale, and a stale summary that starts
+# talking because you happened to click that tab is worse than silence — it
+# waits for `repeat` / /spoken-recap instead. A summary arriving in the
+# terminal you are already looking at is exempt: it is seconds old by
+# construction (see main()).
+FOCUS_READ_WINDOW_SECS = WAIT_STAGES[-1][0]
 WATCH_LOCK = os.path.join(CLAUDE_DIR, "scripts", ".tts-watch.lock")
 BADGE_FILE = os.path.join(CLAUDE_DIR, "tts-badge.txt")
 BADGE_HELPER = os.path.join(CLAUDE_DIR, "scripts", "speaking-badge")
@@ -922,8 +935,15 @@ def watch():
                            state="pending")
         if focus != last_focus:
             # You just switched terminals. If you landed on one that is
-            # holding something, it owes you a read.
-            owed = focus if focus in waiting else None
+            # holding something RECENT, it owes you a read. Past the stale
+            # window (red) it does not: backlog from an hour ago must never
+            # start talking just because you happened to click that tab —
+            # it keeps its color and waits for `repeat` / /spoken-recap.
+            # Arming is per-switch-in, so one fresh arrival re-arms the
+            # terminal and clears whatever else it was holding with it.
+            owed = focus if focus in waiting and any(
+                now - e.get("ts", now) <= FOCUS_READ_WINDOW_SECS
+                for e in waiting[focus]) else None
             last_focus = focus
         if owed and owed in waiting and active_say_pid() is None and not on_call():
             ready = [e for e in waiting[owed]
@@ -1206,6 +1226,18 @@ def main():
         return
     busy_pid = active_say_pid()
     collision = resolve_collision(session_id)
+    # Being already there counts as being there. Focus is checked ONCE, here
+    # on arrival: if this summary just landed in the tab you are looking at,
+    # `hold` speaks it on the spot rather than making you click off and back
+    # to hear it. Presence is the prompt. Unfocused is unchanged — it waits
+    # and the watcher reads it out on switch-in. Only reachable with the
+    # voice free (busy falls through to waiting) and never on a call (that
+    # path returned above), and it honours `focus_speak`: turning click-to-
+    # talk off turns this off too, since it is the same read.
+    focused_here = (
+        busy_pid is None and tty is not None and collision == "hold"
+        and resolve_setting(session_id, "focus_speak", ("on", "off"), "on") == "on"
+        and tty == focused_tty())
     # Resolve the announce-name now, while the session registry entry is
     # alive: /rename (or auto) session title > /tts names map > folder name.
     title = session_name(session_id)
@@ -1214,7 +1246,7 @@ def main():
     # summary CAME from, not whichever one is doing the speaking.
     entry = {"ts": int(time.time()), "project": project,
              "session": session_id, "text": spoken,
-             "spoken": busy_pid is None and collision != "hold",
+             "spoken": busy_pid is None and (collision != "hold" or focused_here),
              "name": humanize(title) if title else speak_name(project),
              "tty": tty, "term": term,
              "color": ("#%02x%02x%02x" % rgb) if rgb else "off",
@@ -1222,11 +1254,11 @@ def main():
     if collision == "follow":
         entry["follow"] = True
     enqueue(entry)
-    if collision == "hold":
-        # Nothing speaks unprompted. The tab goes green and a soft chime
-        # says "something arrived" — enough to notice when you're deep in
-        # something, not enough to pull you out of it. It reads out when
-        # you click into the terminal.
+    if collision == "hold" and not focused_here:
+        # You are not looking at this terminal, so nothing speaks. The tab
+        # goes green and a soft chime says "something arrived" — enough to
+        # notice when you're deep in something, not enough to pull you out
+        # of it. It reads out when you click into the terminal.
         spawn_watch()
         chime(after_pid=busy_pid)
         notify(entry["name"], spoken, session_id)

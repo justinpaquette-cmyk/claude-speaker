@@ -22,10 +22,12 @@ Control the Stop-hook TTS (`~/.claude/scripts/speak-response.py`). Two settings:
 - `/tts color <color|off>` sets the *speaking* color (default `blue`); the
   waiting ladder is fixed. `off` disables tinting for this terminal entirely.
 
-**Focus** — `focus_speak` (default `on`): **clicking into** a waiting terminal
-makes it read out and clear its color. It is a switch-in, not a state: a
-terminal you are already sitting in never starts talking at you on its own.
-`/tts focus off` leaves it waiting for `rr` or `/spoken-recap` instead.
+**Focus** — `focus_speak` (default `on`): **being at** a waiting terminal makes
+it read out and clear its color — either by clicking into it, or by a summary
+landing in the tab you are already watching (in `hold`, that is the one thing
+that speaks unprompted). Red is the cutoff: past 5 minutes a waiting summary
+has gone stale and stays quiet on a click-in, so hour-old backlog never starts
+talking. `/tts focus off` leaves everything waiting for `rr` or `/spoken-recap`.
 
 **Menu bar** — `menubar` (default `on`): the top bar shows `🔊 <terminal>` while
 something is speaking, or `🟡 2 waiting` when summaries are held. Needs the
@@ -46,8 +48,9 @@ heard.
 - `chime` (default) — speak now if the voice is free; if another session is
   talking, chime once that speech ends and leave this one waiting
 - `follow` — same, but a waiting summary auto-reads right after the current one
-- `hold` — **never speak unprompted**, even with the voice free: chime, color the
-  tab, and wait to be clicked into. For when you're deep in something.
+- `hold` — **never speak at a terminal you're not watching**, even with the voice
+  free: chime, color the tab, and wait to be clicked into. A summary landing in
+  the focused tab still reads out — you're looking right at it. Deep-work mode.
 
 **Chime** — `chime` (default `on`): the soft arrival tone. `/tts chime off` makes
 waiting summaries completely silent, color only.

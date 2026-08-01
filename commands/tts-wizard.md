@@ -30,8 +30,8 @@ ls -t ~/.claude/projects/<encoded-cwd>/*.jsonl | head -1   # cwd, / and spaces �
 
    | Feature | What it does |
    |---|---|
-   | **Delivery** (`collision`) | `chime` speak now if the voice is free, else chime and wait · `follow` waiting summaries auto-read in finish order · `hold` never speak unprompted — chime, color the tab, wait to be clicked into |
-   | **Click-to-talk** (`focus_speak`) | Clicking into a waiting terminal reads it out. Fires on the switch-in, so a terminal you're already in never starts talking at you |
+   | **Delivery** (`collision`) | `chime` speak now if the voice is free, else chime and wait · `follow` waiting summaries auto-read in finish order · `hold` nothing speaks at a terminal you're not watching — chime, color the tab, wait to be clicked into; a summary landing in the focused tab still reads out |
+   | **Click-to-talk** (`focus_speak`) | Being at a waiting terminal reads it out — clicking in, or a summary arriving in the tab you're already watching. Past red (5min) it's stale and stays quiet, so old backlog never starts talking |
    | **Colors** (`tab_color`) | 🔵 speaking · 🟢 waiting · 🟡 over 30s · 🔴 over 5min. The speaking color is settable; the waiting ladder is fixed. `off` disables tinting |
    | **Menu bar** (`menubar`) | Top bar shows `🔊 <terminal>` speaking or `🟡 2 waiting` |
    | **Banners** (`notify`) | Notification for a summary that *couldn't* be spoken. Never for one you just heard |

@@ -21,11 +21,11 @@ Restart your Claude Code sessions and you're done — the next response speaks. 
 
 - 🗣️ **Spoken summaries** the moment a response finishes, in the macOS voice you already like.
 - 🎨 **Terminals that show their state in color** — 🔵 speaking · 🟢 waiting · 🟡 30s · 🔴 5min. A wall of terminals becomes readable at a glance.
-- 👆 **Click a waiting terminal and it reads out.** It only ever speaks on the switch-in, so the one you're sitting in stays quiet.
+- 👆 **Click a waiting terminal and it reads out.** Land on it and it catches you up; once it's gone red it's stale, so it stays quiet and waits for `repeat`.
 - 🔁 **`repeat` replays anything — for free.** No model turn, no tokens, no context. `repeat full` gives you the entire response instead of the one-liner, also free.
 - 🤫 **`shh`** stops the voice mid-sentence.
 - 🎧 **Silent on calls.** Mic or camera live and it says nothing at all, chime included.
-- 🧘 **`hold` mode** — nothing ever speaks unprompted. It chimes, colors the tab, and waits until you're ready.
+- 🧘 **`hold` mode** — nothing speaks at a terminal you're not watching. It chimes, colors the tab, and waits until you're ready. Land in the tab it happened in and it just tells you.
 - 📊 **Menu bar and notifications** carry the same state when every terminal is buried. Neither can take your focus.
 - 🔀 **Built for many sessions at once** — one voice at a time, ever, and nothing is ever lost or talked over.
 
@@ -40,7 +40,7 @@ Colors carry the state, so a wall of terminals is readable at a glance. Nothing 
 | 🟡 **yellow** | has been waiting over 30s |
 | 🔴 **red** | has been waiting over 5min |
 
-**Click into a waiting terminal and it reads out**, then goes back to its own color. It triggers on the *switch-in*, not on the state — a terminal you're already sitting in never starts talking at you because a summary landed. You're looking right at it.
+**Click into a waiting terminal and it reads out**, then goes back to its own color. Two rules keep that from becoming noise. **Red is stale**: a summary that's been waiting over 5 minutes has stopped chasing you, so landing on a tab holding hour-old backlog never starts a readout — it keeps its color until you ask, with `repeat` or `/spoken-recap`. And **the terminal you're already in counts as focused**: a summary landing in the tab you're watching just tells you, instead of making you click away and back.
 
 Buried behind another app? The **menu bar** carries the same state — `🔊 the docs terminal` while speaking, `🟡 2 waiting` while held — and a summary that *couldn't* be spoken raises a **notification banner**. Neither can take focus.
 
@@ -50,9 +50,9 @@ Buried behind another app? The **menu bar** carries the same state — `🔊 the
 |---|---|---|
 | **`chime`** *(default)* | speaks now | chimes when the other finishes, then waits |
 | **`follow`** | speaks now | queues and auto-reads next, in finish order |
-| **`hold`** | **waits** | **waits** |
+| **`hold`** | **speaks only if you're watching that terminal**, else waits | **waits** |
 
-`hold` is for when a voice would break your concentration: nothing ever speaks on its own. Every summary chimes softly, colors its tab, and waits to be clicked into. `/tts chime off` drops even the tone and leaves color alone.
+`hold` is for when a voice would break your concentration: nothing speaks at a terminal you aren't looking at. Every summary chimes softly, colors its tab, and waits to be clicked into. The one exception is presence — if the summary lands in the terminal that's focused *right then*, it reads out on the spot, because clicking off and back just to hear it is the same interruption with extra steps. `/tts focus off` turns that off along with click-to-talk; `/tts chime off` drops even the tone and leaves color alone.
 
 Set per terminal or for everything: `/tts collision <chime|follow|hold> [global]`.
 
@@ -113,10 +113,12 @@ response finishes ──▶ Stop hook (speak-response.py)
                         │  prefers the 🔊-marked line, else sanitizes + caps
                         │  appends to ~/.claude/tts-queue.jsonl
                         ├─ mic/camera live ─▶ silence, tab waits green→yellow→red
-                        ├─ hold mode ───────▶ chime, tab waits green→yellow→red
+                        ├─ hold, watching it ▶ /usr/bin/say — you're right there
+                        ├─ hold, elsewhere ─▶ chime, tab waits green→yellow→red
                         ├─ voice idle ──────▶ /usr/bin/say, tab blue for the readout
                         └─ voice busy ──────▶ deferred chime, tab waits
                                                 └─ click the tab ─▶ it reads out
+                                                     (until red: then `repeat`)
 ```
 
 Everything is outside the model loop: no API calls, no tokens, no context impact beyond the single 🔊 line per response.
