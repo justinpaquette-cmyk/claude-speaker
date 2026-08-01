@@ -35,9 +35,22 @@ Nothing to do — responses just speak. Control it with two slash commands:
 | `/tts raise <window\|off>` | Opt-in: raise the speaking window (default `off`) |
 
 **What the voice calls a terminal:** its session title — set one with Claude Code's built-in `/rename` (auto titles work too) — else the `/tts name` custom name, else the project folder name. Titles and folder names are humanized for speech (camelCase/dashes split into words).
+| `rr` | Replay the last summary — **no model turn, no tokens** (see below) |
 | `/spoken-recap` | Replay this session's queued summaries |
 | `/spoken-recap status` | List this session's queue without speaking |
 | `/spoken-recap all` | Replay queued summaries from every session |
+
+## Missed it? `rr` — free replay
+
+Type **`rr`** and the last summary plays again. It costs nothing: a `UserPromptSubmit` hook recognizes the trigger, speaks the summary itself, and exits 2, which makes Claude Code **erase the prompt and never call the model**. No turn, no tokens, no context growth — the same "free to look at" feel as `/context`.
+
+| Type | What happens |
+|---|---|
+| `rr` | This session's most recent summary, again |
+| `rr all` | Every session's unplayed summaries |
+| `rr status` | Lists this session's queue, speaks nothing |
+
+Only those three exact strings are intercepted; anything else goes to Claude untouched. If a summary is mid-readout, `rr` says so rather than talking over it.
 
 ## See which session is talking
 
@@ -88,13 +101,13 @@ State lives in `~/.claude/tts-state.json` (global mode) and `~/.claude/tts-sessi
 
 ```bash
 rm ~/.claude/scripts/speak-response.py ~/.claude/scripts/tts-recap.py \
-   ~/.claude/scripts/av-status \
+   ~/.claude/scripts/repeat-hook.py ~/.claude/scripts/av-status \
    ~/.claude/commands/tts.md ~/.claude/commands/spoken-recap.md \
    ~/.claude/tts-state.json ~/.claude/tts-queue.jsonl
 rm -rf ~/.claude/tts-sessions ~/.claude/tts-tabcolor
 ```
 
-Then remove the `Stop` hook entry from `~/.claude/settings.json` (or via `/hooks`) and the "Spoken Summary (TTS)" section from `~/.claude/CLAUDE.md`.
+Then remove the `Stop` and `UserPromptSubmit` hook entries from `~/.claude/settings.json` (or via `/hooks`) and the "Spoken Summary (TTS)" section from `~/.claude/CLAUDE.md`.
 
 ## Requirements
 

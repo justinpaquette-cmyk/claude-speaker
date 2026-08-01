@@ -11,8 +11,10 @@ fi
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p ~/.claude/scripts ~/.claude/commands
-cp "$REPO_DIR/scripts/speak-response.py" "$REPO_DIR/scripts/tts-recap.py" ~/.claude/scripts/
-chmod +x ~/.claude/scripts/speak-response.py ~/.claude/scripts/tts-recap.py
+cp "$REPO_DIR/scripts/speak-response.py" "$REPO_DIR/scripts/tts-recap.py" \
+   "$REPO_DIR/scripts/repeat-hook.py" ~/.claude/scripts/
+chmod +x ~/.claude/scripts/speak-response.py ~/.claude/scripts/tts-recap.py \
+         ~/.claude/scripts/repeat-hook.py
 cp "$REPO_DIR/commands/tts.md" "$REPO_DIR/commands/spoken-recap.md" ~/.claude/commands/
 echo "Installed scripts to ~/.claude/scripts and commands to ~/.claude/commands"
 
@@ -29,7 +31,7 @@ else
   echo "WARNING: no C compiler (install Xcode Command Line Tools) — speech will play even during calls" >&2
 fi
 
-# Register the Stop hook in ~/.claude/settings.json (merge, never clobber).
+# Register the hooks in ~/.claude/settings.json (merge, never clobber).
 python3 - <<'PY'
 import json, os
 
@@ -40,19 +42,36 @@ try:
 except (OSError, ValueError):
     settings = {}
 
-command = "python3 " + os.path.expanduser("~/.claude/scripts/speak-response.py")
-stop = settings.setdefault("hooks", {}).setdefault("Stop", [])
-already = any(h.get("command", "").endswith("speak-response.py")
-              for group in stop for h in group.get("hooks", []))
-if already:
-    print("Stop hook already registered — leaving settings.json untouched")
-else:
-    stop.append({"hooks": [{"type": "command", "command": command,
-                            "timeout": 15, "async": True}]})
+hooks = settings.setdefault("hooks", {})
+changed = False
+
+
+def register(event, script, entry):
+    global changed
+    groups = hooks.setdefault(event, [])
+    if any(h.get("command", "").endswith(script)
+           for group in groups for h in group.get("hooks", [])):
+        print(f"{event} hook already registered — leaving it as it is")
+        return
+    groups.append({"hooks": [entry]})
+    changed = True
+    print(f"{event} hook registered in ~/.claude/settings.json")
+
+
+cmd = lambda name: "python3 " + os.path.expanduser(f"~/.claude/scripts/{name}")
+# Speaks the summary. Async so it never delays the session.
+register("Stop", "speak-response.py",
+         {"type": "command", "command": cmd("speak-response.py"),
+          "timeout": 15, "async": True})
+# Catches `rr` and replays a summary without a model turn. Must be
+# synchronous: it blocks the prompt (exit 2) so no tokens are spent.
+register("UserPromptSubmit", "repeat-hook.py",
+         {"type": "command", "command": cmd("repeat-hook.py"), "timeout": 25})
+
+if changed:
     with open(path, "w") as f:
         json.dump(settings, f, indent=2)
         f.write("\n")
-    print("Stop hook registered in ~/.claude/settings.json")
 PY
 
 # Teach Claude the spoken-summary convention (skip if already present).
