@@ -19,15 +19,20 @@ State: global mode in ~/.claude/tts-state.json {"mode": "summary"};
 per-session overrides in ~/.claude/tts-sessions/<session_id>.json.
 Toggled by the /tts skill.
 
-Delivery: every summary is appended to ~/.claude/tts-queue.jsonl. If nothing
-is currently speaking, it plays immediately (spoken: true). If another
-session is talking, the "collision" setting (per-session override > global
-> "chime") decides:
-  chime  - a chime plays after the current speech and the entry waits
-           (spoken: false) for /spoken-recap (scripts/tts-recap.py)
-  follow - the entry waits its turn and is spoken automatically right
+Delivery: every summary is appended to ~/.claude/tts-queue.jsonl. The
+"collision" setting (per-session override > global > "chime") decides
+what happens to it:
+  chime  - speak immediately if the voice is free; if another session is
+           talking, chime after that speech ends and leave the summary
+           waiting (spoken: false)
+  follow - same, except a waiting summary is spoken automatically right
            after the current speech ends (a locked drainer subprocess,
            `speak-response.py --drain`, serializes the readout)
+  hold   - never speak unprompted, even with the voice free: chime, color
+           the tab, and wait to be clicked into. For when you are deep in
+           something and a voice would break it.
+Any waiting summary can also be replayed with `repeat`/`rr` or
+/spoken-recap (scripts/tts-recap.py).
 If the mic or camera is
 live (a call, a recording — checked via the compiled av-status helper),
 nothing plays at all, not even the chime; the entry just queues. Always
@@ -99,7 +104,7 @@ SUMMARY_FLOOR = 400
 SUMMARY_CEILING = 2500
 MARKER = "🔊"
 MODES = ("off", "summary", "full")
-COLLISIONS = ("chime", "follow")
+COLLISIONS = ("chime", "follow", "hold")
 RAISES = ("off", "window")
 FRESH_WAIT_SECS = 8  # must stay under the hook timeout in settings.json
 FOLLOW_WINDOW_SECS = 300  # drainer ignores entries older than this
@@ -907,6 +912,25 @@ def badge(text, session_id=None):
         pass
 
 
+def chime(after_pid=None, session_id=None):
+    """A soft "something arrived" tone. `/tts chime off` silences it.
+
+    Waits out `after_pid` first when given, so the chime never lands on
+    top of a readout already in progress and mask it.
+    """
+    if resolve_setting(session_id, "chime", ("on", "off"), "on") == "off":
+        return
+    play = "/usr/bin/afplay -v 0.5 /System/Library/Sounds/Glass.aiff"
+    if after_pid:
+        play = (f"while kill -0 {after_pid} 2>/dev/null; do sleep 0.3; done; "
+                + play)
+    try:
+        subprocess.Popen(["/bin/sh", "-c", play], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
+
+
 def notify(title, text, session_id=None):
     """Banner for a summary that could NOT be spoken — you were on a call,
     or another terminal was talking. Never for one you just heard, and
@@ -1082,7 +1106,8 @@ def main():
     # follow-mode drainer, or a focus read) tints the terminal the
     # summary CAME from, not whichever one is doing the speaking.
     entry = {"ts": int(time.time()), "project": project,
-             "session": session_id, "text": spoken, "spoken": busy_pid is None,
+             "session": session_id, "text": spoken,
+             "spoken": busy_pid is None and collision != "hold",
              "name": humanize(title) if title else speak_name(project),
              "tty": tty, "term": term,
              "color": ("#%02x%02x%02x" % rgb) if rgb else "off",
@@ -1090,6 +1115,15 @@ def main():
     if collision == "follow":
         entry["follow"] = True
     enqueue(entry)
+    if collision == "hold":
+        # Nothing speaks unprompted. The tab goes green and a soft chime
+        # says "something arrived" — enough to notice when you're deep in
+        # something, not enough to pull you out of it. It reads out when
+        # you click into the terminal.
+        spawn_watch()
+        chime(after_pid=busy_pid)
+        notify(entry["name"], spoken, session_id)
+        return
     if busy_pid is not None:
         # Something is already talking: don't collide. Either way the
         # summary is now unspoken and waiting, so the tab starts aging
@@ -1102,13 +1136,8 @@ def main():
             spawn_drainer()
             return
         # chime (default): chime AFTER the current speech finishes so
-        # neither is masked; the summary waits for /spoken-recap.
-        subprocess.Popen(
-            ["/bin/sh", "-c",
-             f"while kill -0 {busy_pid} 2>/dev/null; do sleep 0.3; done; "
-             "/usr/bin/afplay -v 0.6 /System/Library/Sounds/Glass.aiff"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True)
+        # neither is masked; the summary waits for a click or /spoken-recap.
+        chime(after_pid=busy_pid, session_id=session_id)
         return
     # Name-prefixed on every path — immediate, drainer, /spoken-recap — so a
     # summary is always attributable to a terminal, contention or not.

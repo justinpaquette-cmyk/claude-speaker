@@ -42,9 +42,15 @@ heard.
   thing you type in that app can land there. Needs Accessibility permission
   (Terminal.app or iTerm2 only).
 
-**Collision** — what happens when another session's voice is already talking:
-- `chime` — soft chime after the current speech; summary queues for `/spoken-recap` (default)
-- `follow` — summary auto-reads right after the current speech ends
+**Delivery** (the `collision` setting) — when a finished summary gets spoken:
+- `chime` (default) — speak now if the voice is free; if another session is
+  talking, chime once that speech ends and leave this one waiting
+- `follow` — same, but a waiting summary auto-reads right after the current one
+- `hold` — **never speak unprompted**, even with the voice free: chime, color the
+  tab, and wait to be clicked into. For when you're deep in something.
+
+**Chime** — `chime` (default `on`): the soft arrival tone. `/tts chime off` makes
+waiting summaries completely silent, color only.
 
 Scope: **this session** by default; add `global` to set the default for all sessions.
 
@@ -52,7 +58,8 @@ Scope: **this session** by default; add `global` to set the default for all sess
 
 `/tts <off|summary|full> [global]` — set the mode.
 `/tts length <n> [global]` — set the summary character cap (e.g. `/tts length 2000`).
-`/tts collision <chime|follow> [global]` — set the collision policy.
+`/tts collision <chime|follow|hold> [global]` — set the delivery policy.
+`/tts chime <on|off> [global]` — the arrival tone.
 `/tts color <off|red|orange|yellow|green|blue|purple|#rrggbb> [global]` — speaking tint.
 `/tts focus <on|off> [global]` — read out when you click into a waiting terminal.
 `/tts menubar <on|off> [global]` — menu-bar indicator.
@@ -63,7 +70,7 @@ No argument = report current state.
 
 ## Steps
 
-1. Parse the arguments. `collision` as the first word means the setting is `collision` (valid values: `chime`, `follow`); `length` as the first word means the setting is `summary_chars` (value = the following positive integer); `color` as the first word means the setting is `tab_color` (value = the following color word, `#rrggbb`, or `off`); `focus` as the first word means the setting is `focus_speak` (valid values: `on`, `off`); `menubar` and `notify` as the first word mean the setting of that name (valid values: `on`, `off`); `raise` as the first word means the setting is `raise` (valid values: `window`, `off`); `name` as the first word means everything after it is the spoken name for this project; otherwise the setting is `mode` (valid values: `off`, `summary`, `full`). If no valid argument, skip to step 4 (report only).
+1. Parse the arguments. `collision` as the first word means the setting is `collision` (valid values: `chime`, `follow`, `hold`); `chime` as the first word means the setting is `chime` (valid values: `on`, `off`); `length` as the first word means the setting is `summary_chars` (value = the following positive integer); `color` as the first word means the setting is `tab_color` (value = the following color word, `#rrggbb`, or `off`); `focus` as the first word means the setting is `focus_speak` (valid values: `on`, `off`); `menubar` and `notify` as the first word mean the setting of that name (valid values: `on`, `off`); `raise` as the first word means the setting is `raise` (valid values: `window`, `off`); `name` as the first word means everything after it is the spoken name for this project; otherwise the setting is `mode` (valid values: `off`, `summary`, `full`). If no valid argument, skip to step 4 (report only).
 
    **`raise`:** after writing `window`, run `python3 ~/.claude/scripts/speak-response.py --check-raise` and report its line — raising silently does nothing until Accessibility is granted to the terminal app.
 

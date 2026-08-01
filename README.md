@@ -38,22 +38,24 @@ Nothing to do — responses just speak. Control it with two slash commands:
 | `/tts raise <window\|off>` | Opt-in: raise the speaking window (default `off`) |
 
 **What the voice calls a terminal:** its session title — set one with Claude Code's built-in `/rename` (auto titles work too) — else the `/tts name` custom name, else the project folder name. Titles and folder names are humanized for speech (camelCase/dashes split into words).
-| `rr` | Replay the last summary — **no model turn, no tokens** (see below) |
+| `repeat` / `rr` | Replay the last summary — **no model turn, no tokens** (see below) |
+| `/tts collision hold` | Never speak unprompted: chime, color, wait for a click |
+| `/tts chime <on\|off>` | The soft arrival tone (default `on`) |
 | `/spoken-recap` | Replay this session's queued summaries |
 | `/spoken-recap status` | List this session's queue without speaking |
 | `/spoken-recap all` | Replay queued summaries from every session |
 
-## Missed it? `rr` — free replay
+## Missed it? `repeat` — free replay
 
-Type **`rr`** and the last summary plays again. It costs nothing: a `UserPromptSubmit` hook recognizes the trigger, speaks the summary itself, and exits 2, which makes Claude Code **erase the prompt and never call the model**. No turn, no tokens, no context growth — the same "free to look at" feel as `/context`.
+Type **`repeat`** (or **`rr`**) and the last summary plays again. It costs nothing: a `UserPromptSubmit` hook recognizes the trigger, speaks the summary itself, and exits 2, which makes Claude Code **erase the prompt and never call the model**. No turn, no tokens, no context growth — the same "free to look at" feel as `/context`.
 
 | Type | What happens |
 |---|---|
-| `rr` | This session's most recent summary, again |
-| `rr all` | Every session's unplayed summaries |
-| `rr status` | Lists this session's queue, speaks nothing |
+| `repeat` / `rr` | This session's most recent summary, again |
+| `repeat all` / `rr all` | Every session's unplayed summaries |
+| `repeat status` | Lists this session's queue, speaks nothing |
 
-Only those three exact strings are intercepted; anything else goes to Claude untouched. If a summary is mid-readout, `rr` says so rather than talking over it.
+Only those exact strings are intercepted — "repeat the migration for the other table" goes to Claude untouched. `again` is deliberately *not* a trigger: it far more often means "do that again" than "say that again". If a summary is mid-readout, `repeat` says so rather than talking over it.
 
 ## The terminal tells you what it wants
 
@@ -83,8 +85,9 @@ Buried behind another app? The **menu bar** carries the same state (`🔊 the do
 - Voice idle → a finishing session **speaks immediately**.
 - Voice busy → the **collision setting** decides, per session (override) or globally:
   - **`chime`** (default) — wait for the current speech to end, play a soft **chime**, and queue the summary for `/spoken-recap`. You set the pacing.
-  - **`follow`** — queue the summary and **speak it automatically right after** the current speech (and any earlier queued summaries) finishes, prefixed with its project name. Sessions read out in finish order, serialized — never over each other.
-- `/tts collision <chime|follow> [global]` switches between them; `/spoken-recap` in any terminal replays a session's queued summaries either way.
+    - **`follow`** — queue the summary and **speak it automatically right after** the current speech (and any earlier queued summaries) finishes, prefixed with its project name. Sessions read out in finish order, serialized — never over each other.
+- Voice free but you're **deep in something**? `/tts collision hold` — nothing ever speaks unprompted. Every summary chimes softly, colors its tab, and waits to be clicked into. `/tts chime off` drops even the tone, leaving color alone.
+- `/tts collision <chime|follow|hold> [global]` switches between them; `repeat` or `/spoken-recap` replays a session's queued summaries either way.
 
 Follow mode only auto-reads summaries queued by follow-mode sessions in the last 5 minutes — older backlog and summaries held during a call never replay on their own; they wait for `/spoken-recap`.
 
