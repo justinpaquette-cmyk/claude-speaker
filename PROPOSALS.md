@@ -53,6 +53,19 @@ against the documented contract rather than the implementation.
 **Recommendation: Build first.** Everything else on this list gets safer and
 cheaper afterwards, and #5 is meaningless without it.
 
+> **Half shipped 2026-08-01.** The `CLAUDE_DIR` override landed in all three
+> scripts (`speak-response.py` 15 sites, `tts-recap.py` 7, `repeat-hook.py` 4).
+> **The test suite did not** — there is still no `tests/` and no `test_*`, so
+> "Build first" now applies to the remaining half, and #5 still waits on it.
+>
+> The override's stated value showed up the same day it landed: `rr N` / `rr 5m`
+> was verified end-to-end against a scratch `CLAUDE_DIR` with a stubbed `speak`,
+> on a synthetic 6-deep stack — no live queue touched, no real terminal spoke
+> test text. That is the exact cost this proposal was written about, and it is
+> now avoidable by anyone who knows the variable exists. What is still missing
+> is the part that makes it *repeatable*: that verification was a throwaway
+> heredoc, so it proved the change and then evaporated.
+
 ---
 
 ## 2. Demo GIF in the README
@@ -170,6 +183,22 @@ added to the `repeat`/`rr`/`shh`/`hush`/`stop` vocabulary is a word the user has
 to remember and a string the hook has to not misfire on.
 
 **Recommendation: Kill unless asked.**
+
+> **Shipped 2026-08-01 — asked for, so the gate fired as written.** Justin asked
+> for it directly, and it arrived larger than this proposal scoped: not just
+> N-back, but a **stack pop** — `rr 3` takes the last 3 updates, `rr 5m` takes a
+> time window, on all five replay names. The framing that made it worth more
+> than "marginal" was his: the queue is a stack you pop a depth from, so the
+> gap this fills is not "the one before last" but "the last few things that
+> happened while I was away" — which `/spoken-recap` answered only by reading
+> everything.
+>
+> The risk named above was the real one and was designed against: no new
+> keywords were added. The grammar is strictly two tokens, a name plus a bare
+> number with an optional unit, so `rr 3 times`, `rr 0` and *"repeat the
+> migration for the other table"* all fall through to Claude untouched. A
+> numbered pop also ignores the played flag — "the last 3" means the last 3 —
+> and the bare recap grew its own `recap_max` cap separately.
 
 ---
 
@@ -315,12 +344,12 @@ second person does.
 
 | # | Idea | Call |
 |---|---|---|
-| 1 | Test suite + `CLAUDE_DIR` override | **Build first** |
+| 1 | Test suite + `CLAUDE_DIR` override | **Build first** → *override shipped 2026-08-01; test suite still open* |
 | 2 | Demo GIF in README | **Build** |
 | 3 | iPhone reach | **Research first** |
 | 4 | Per-project voices | **Build** |
 | 5 | CI | **Build after #1** |
-| 6 | `repeat 2` / N-back | **Kill unless asked** |
+| 6 | `repeat 2` / N-back | **Kill unless asked** → *asked; shipped 2026-08-01 as `rr N` / `rr 5m`* |
 | 7 | Digest roll-up | **Research** |
 | 8 | Configurable wait thresholds | **Kill until asked** |
 | 9 | Aging chime escalation | **Kill** |
