@@ -53,10 +53,15 @@ Type **`repeat`** (or **`rr`**) and the last summary plays again. It costs nothi
 | Type | What happens |
 |---|---|
 | `repeat` / `rr` | This session's most recent summary, again |
+| `repeat full` | **The whole response**, not the one-line summary |
+| `repeat inverse` | Whichever rendering you *didn't* get — full if you're in `summary` mode, summary if you're in `full` |
 | `repeat all` / `rr all` | Every session's unplayed summaries |
 | `repeat status` | Lists this session's queue, speaks nothing |
+| `repeat stop` | Shut the voice up right now |
 
-Only those exact strings are intercepted — "repeat the migration for the other table" goes to Claude untouched. `again` is deliberately *not* a trigger: it far more often means "do that again" than "say that again". If a summary is mid-readout, `repeat` says so rather than talking over it.
+`full` and `inverse` are free too. The hook payload carries this session's transcript path, so the response is re-rendered from disk with the same sanitizer that spoke it — heard the summary, want the detail? You get it without a model call.
+
+Only those exact strings are intercepted — "repeat full coverage for the auth tests" goes to Claude untouched. `again` is deliberately *not* a trigger: it far more often means "do that again" than "say that again". If a summary is mid-readout, `repeat` says so rather than talking over it.
 
 ## The terminal tells you what it wants
 
