@@ -69,12 +69,18 @@ Type **`repeat`** (or **`rr`**) and it plays again, costing nothing. A `UserProm
 | Type | What happens |
 |---|---|
 | `repeat` | This session's most recent summary, again |
+| **`repeat 3`** | **Pop the last 3 updates off the stack** — any number |
+| **`repeat 5m`** | **Pop the last 5 minutes** — `s` / `m` / `h` |
 | `repeat full` | **The whole response**, not the one-line summary |
 | `repeat inverse` | Whichever rendering you *didn't* get — full if you're in `summary` mode, summary if you're in `full` |
 | `repeat all` | Every session's unplayed summaries |
 | `repeat status` | Lists this session's queue, speaks nothing |
 | `shh` / `hush` / `repeat stop` | Shut the voice up right now |
 | `stop` | Same — but only while the voice is talking; otherwise it's your prompt |
+
+**The queue is a stack.** Every finished turn pushes one update down; a replay pops however many you ask for off the top. That's why the bound is a *count* and not a cutoff — you came back to the desk and want the last two or three things that happened, not "everything newer than some age". `repeat 3` gives you exactly three, oldest of them first so it plays in the order it happened. The time form is there for when you think in "since I walked away" instead of in updates.
+
+A numbered pop deliberately **ignores whether you already heard it**: "the last 3" means the last 3. Reading them marks them played, so a later bare `repeat all` won't say them twice. A number bigger than the stack just gives you the whole stack.
 
 **Five names, one command.** `rr`, `repeat`, `replay`, `recap` and `tts` each take that whole list — `rr full`, `replay full` and `recap full` are the same thing. A replay you can't remember the word for is a replay you don't use, and an alias costs one dict entry. The slash commands are untouched: `/tts`, `/recap` and `/spoken-recap` are never bare words, and `tts off` still reaches Claude, so configuring the voice works normally.
 

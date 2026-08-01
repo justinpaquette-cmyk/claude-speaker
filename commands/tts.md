@@ -29,7 +29,9 @@ landing in the tab you are already watching (in `hold`, that is the one thing
 that speaks unprompted). A click-in reads out whatever the terminal holds, at
 any age — a colored tab is one you have not heard yet.
 `/tts focus off` leaves everything waiting for a replay word (`rr`, `repeat`,
-`replay`, `recap` or `tts` — all the same command) or `/spoken-recap`.
+`replay`, `recap` or `tts` — all the same command) or `/spoken-recap`. The
+queue is a stack, so a replay word also takes a count or a window: `rr 3`
+pops the last three updates, `rr 5m` pops the last five minutes.
 
 **Ask** — the purple "you are the blocker" cue, the only one that means a session
 is stopped waiting on you rather than holding something for you (off the

@@ -17,6 +17,8 @@ so it works with whichever one you reach for. `<name>` below is any of them:
                          the one-line summary
   <name> inverse         this turn in whichever rendering you did NOT get:
                          full if you are in summary mode, summary if full
+  <name> 3               pop the last 3 updates off the stack (any number)
+  <name> 5m              pop everything from the last 5 minutes (s/m/h)
   <name> status          list this session's queue, speak nothing
   <name> stop / shh      shut the voice up right now
   stop                   same, but only while the voice is actually
@@ -41,6 +43,7 @@ often means "do that again" than "say that again".
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -167,10 +170,49 @@ def replay_turn(payload, kind):
             + (" — `repeat stop` to cut it off" if words > 120 else ""))
 
 
-def recap_args(kind, session_id):
+# <name> <number> pops that many updates off the stack; <name> <number><unit>
+# pops a window of time. Anything else after a name is NOT a trigger and
+# falls through to Claude, so "repeat 3 times for the other table" is safe.
+UNITS = {"s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,
+         "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60,
+         "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600}
+
+
+def parse_trigger(prompt):
+    """(action, argument) for a replay prompt, else (None, None).
+
+    Exact word triggers first, then the stack forms: `rr 3` (count) and
+    `rr 5m` (window). A count is the primary shape — the queue is a stack
+    of updates and you pop the top N — with the time form there for when
+    you think in "since I walked away" instead of in updates.
+    """
+    p = " ".join((prompt or "").strip().lower().split())
+    if p in TRIGGERS:
+        return TRIGGERS[p], None
+    parts = p.split()
+    if len(parts) != 2 or parts[0] not in REPLAY_NAMES:
+        return None, None
+    m = re.fullmatch(r"(\d+)([a-z]*)", parts[1])
+    if not m:
+        return None, None
+    n, unit = int(m.group(1)), m.group(2)
+    if n <= 0:
+        return None, None
+    if not unit:
+        return "last", n
+    if unit in UNITS:
+        return "since", n * UNITS[unit]
+    return None, None
+
+
+def recap_args(kind, session_id, arg=None):
     mine = ["--session", session_id] if session_id else []
     if kind == "latest":
         return ["--latest"] + mine
+    if kind == "last":
+        return ["--last", str(arg)] + mine
+    if kind == "since":
+        return ["--since", str(arg)] + mine
     if kind == "all":
         return []
     return ["--status"] + mine
@@ -181,7 +223,7 @@ def main():
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         return 0
-    kind = TRIGGERS.get((payload.get("prompt") or "").strip().lower())
+    kind, arg = parse_trigger(payload.get("prompt"))
     if kind is None:
         return 0  # not for us — hand the prompt to Claude untouched
     if kind == "stop-if-speaking":
@@ -204,7 +246,7 @@ def main():
         return 2
     try:
         out = subprocess.run(
-            [sys.executable, RECAP] + recap_args(kind, payload.get("session_id")),
+            [sys.executable, RECAP] + recap_args(kind, payload.get("session_id"), arg),
             capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"repeat: replay failed ({exc})", file=sys.stderr)
