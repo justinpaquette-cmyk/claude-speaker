@@ -20,10 +20,11 @@ The installer is idempotent and merge-safe: it copies two Python scripts into `~
 
 ## Usage
 
-Nothing to do — responses just speak. Control it with two slash commands:
+Nothing to do — responses just speak. Forgotten what's available? **`/tts-wizard`** shows every feature with your current setting next to it and lets you pick a new setup from menus. Otherwise:
 
 | Command | What it does |
 |---|---|
+| `/tts-wizard` | **Guided tour** — see every feature and pick your setup from menus |
 | `/tts off` | Silence **this session** (others keep talking) |
 | `/tts summary` | Default: speak only the final 🔊 summary line |
 | `/tts full` | Speak the entire response (markdown/code sanitized out) |

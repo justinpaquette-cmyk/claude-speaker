@@ -15,7 +15,8 @@ cp "$REPO_DIR/scripts/speak-response.py" "$REPO_DIR/scripts/tts-recap.py" \
    "$REPO_DIR/scripts/repeat-hook.py" ~/.claude/scripts/
 chmod +x ~/.claude/scripts/speak-response.py ~/.claude/scripts/tts-recap.py \
          ~/.claude/scripts/repeat-hook.py
-cp "$REPO_DIR/commands/tts.md" "$REPO_DIR/commands/spoken-recap.md" ~/.claude/commands/
+cp "$REPO_DIR/commands/tts.md" "$REPO_DIR/commands/spoken-recap.md" \
+   "$REPO_DIR/commands/tts-wizard.md" ~/.claude/commands/
 echo "Installed scripts to ~/.claude/scripts and commands to ~/.claude/commands"
 
 # Build the mic/camera detector (call suppression). Optional: without it,

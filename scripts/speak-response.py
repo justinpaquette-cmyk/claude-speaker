@@ -598,6 +598,89 @@ def _all_tab_colors():
     return tabs
 
 
+# Every setting the wizard (and /tts) can touch: key -> allowed values.
+# "color" and "int" are validated specially. Keeping this in one place
+# means a caller never has to know the file layout or merge JSON by hand.
+SETTABLE = {"mode": MODES, "collision": COLLISIONS, "chime": ("on", "off"),
+            "focus_speak": ("on", "off"), "menubar": ("on", "off"),
+            "notify": ("on", "off"), "raise": RAISES,
+            "tab_color": "color", "summary_chars": "int"}
+DEFAULTS = {"mode": "summary", "collision": "chime", "chime": "on",
+            "focus_speak": "on", "menubar": "on", "notify": "on",
+            "raise": "off", "tab_color": DEFAULT_TAB_COLOR,
+            "summary_chars": "adaptive"}
+
+
+def _settings_path(session_id):
+    if not session_id:
+        return STATE_FILE
+    os.makedirs(SESSION_DIR, exist_ok=True)
+    return os.path.join(SESSION_DIR, f"{session_id}.json")
+
+
+def set_setting(key, value, session_id=None):
+    """Merge one setting into the session or global file. Returns a message."""
+    allowed = SETTABLE.get(key)
+    if allowed is None:
+        return f"unknown setting {key!r} — one of: {', '.join(sorted(SETTABLE))}"
+    if allowed == "int":
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return f"{key} wants a positive integer, got {value!r}"
+        if value <= 0:
+            return f"{key} wants a positive integer, got {value!r}"
+    elif allowed == "color":
+        value = str(value).strip().lower()
+        if value not in ("off", "none", "false") and value not in TAB_COLORS \
+                and not re.fullmatch(r"#[0-9a-f]{6}", value):
+            return (f"{key} wants off, a #rrggbb hex, or one of: "
+                    + ", ".join(TAB_COLORS))
+    elif value not in allowed:
+        return f"{key} wants one of: {', '.join(allowed)} (got {value!r})"
+    path = _settings_path(session_id)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    data[key] = value
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+    except OSError as exc:
+        return f"could not write {path}: {exc}"
+    return f"{key} = {value} ({'this session' if session_id else 'global'})"
+
+
+def show_settings(session_id=None):
+    """Print every setting, its value, and where that value came from."""
+    print(f"{'setting':<14} {'value':<12} source")
+    for key in SETTABLE:
+        session_val = global_val = None
+        if session_id:
+            try:
+                with open(_settings_path(session_id)) as f:
+                    session_val = json.load(f).get(key)
+            except (OSError, ValueError):
+                pass
+        try:
+            with open(STATE_FILE) as f:
+                global_val = json.load(f).get(key)
+        except (OSError, ValueError):
+            pass
+        if session_val not in (None, ""):
+            value, source = session_val, "this session"
+        elif global_val not in (None, ""):
+            value, source = global_val, "global"
+        else:
+            value, source = DEFAULTS.get(key, "-"), "default"
+        print(f"{key:<14} {str(value):<12} {source}")
+
+
 def check_raise():
     """Report whether window-raising can actually work here (used by /tts)."""
     term = os.environ.get("TERM_PROGRAM") or ""
@@ -1158,6 +1241,14 @@ def main():
         raise_window(tty, term)
 
 
+def _arg(flag):
+    """Value following `flag` on the command line, or None."""
+    try:
+        return sys.argv[sys.argv.index(flag) + 1]
+    except (ValueError, IndexError):
+        return None
+
+
 if __name__ == "__main__":
     try:
         if "--drain" in sys.argv:
@@ -1170,6 +1261,12 @@ if __name__ == "__main__":
             repair()
         elif "--watch" in sys.argv:
             watch()
+        elif "--settings" in sys.argv:
+            show_settings(_arg("--session"))
+        elif "--set" in sys.argv:
+            i = sys.argv.index("--set")
+            print(set_setting(sys.argv[i + 1], sys.argv[i + 2],
+                              _arg("--session")))
         else:
             main()
     finally:

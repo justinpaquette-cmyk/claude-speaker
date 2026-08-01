@@ -67,30 +67,45 @@ Scope: **this session** by default; add `global` to set the default for all sess
 `/tts raise <window|off> [global]` — raise the speaking window (no focus steal).
 `/tts name <spoken name>` — how the voice announces THIS project (e.g. `/tts name the docs terminal`).
 No argument = report current state.
+`/tts-wizard` — guided tour of every feature with pick-from-a-list configuration.
 
 ## Steps
 
-1. Parse the arguments. `collision` as the first word means the setting is `collision` (valid values: `chime`, `follow`, `hold`); `chime` as the first word means the setting is `chime` (valid values: `on`, `off`); `length` as the first word means the setting is `summary_chars` (value = the following positive integer); `color` as the first word means the setting is `tab_color` (value = the following color word, `#rrggbb`, or `off`); `focus` as the first word means the setting is `focus_speak` (valid values: `on`, `off`); `menubar` and `notify` as the first word mean the setting of that name (valid values: `on`, `off`); `raise` as the first word means the setting is `raise` (valid values: `window`, `off`); `name` as the first word means everything after it is the spoken name for this project; otherwise the setting is `mode` (valid values: `off`, `summary`, `full`). If no valid argument, skip to step 4 (report only).
+Do not edit the settings files by hand — the script owns them, validates values,
+and merges without clobbering:
 
-   **`raise`:** after writing `window`, run `python3 ~/.claude/scripts/speak-response.py --check-raise` and report its line — raising silently does nothing until Accessibility is granted to the terminal app.
+```bash
+python3 ~/.claude/scripts/speak-response.py --settings [--session <id>]
+python3 ~/.claude/scripts/speak-response.py --set <key> <value> [--session <id>]
+```
 
-   **`length`:** write the integer under the key `"summary_chars"` (not `"length"`) into the target file per the scope rules below (session by default, `global` for all sessions). Read-modify-write, preserving other keys.
+1. Map the first word to a setting key: `collision`→`collision`, `chime`→`chime`,
+   `length`→`summary_chars`, `color`→`tab_color`, `focus`→`focus_speak`,
+   `menubar`→`menubar`, `notify`→`notify`, `raise`→`raise`; anything else that is
+   a valid mode (`off`/`summary`/`full`) means `mode`. No valid argument → skip to
+   step 4 (report only). `name` is special — see below.
 
    **`name`:** merge into `~/.claude/tts-state.json` (always global) a `"names"` map entry keyed by the basename of the current working directory, value = the given spoken name, e.g. `{"names": {"retoolBot": "the retool terminal"}}`. Read-modify-write, preserving all other keys. Then report and stop.
 
    Note the announce-name precedence: the session's title (Claude Code's `/rename`, or its auto title) wins over this map, which wins over the humanized folder name. To rename ONE terminal, `/rename` is usually what you want; `/tts name` sets the fallback for all terminals in this project folder.
 
-2. **Global scope** (`global` present): target file is `~/.claude/tts-state.json`.
+2. **Global scope** (`global` present): call `--set` with no `--session`.
 
-3. **Session scope** (default): identify THIS session's ID — it is the basename (without `.jsonl`) of the most recently modified transcript in this project's dir, which is reliable mid-turn because this session just wrote the user's prompt to it:
+3. **Session scope** (default): identify THIS session's ID — the basename (without `.jsonl`) of the most recently modified transcript in this project's dir, which is reliable mid-turn because this session just wrote the user's prompt to it:
    ```bash
    ls -t ~/.claude/projects/<encoded-cwd>/*.jsonl | head -1
    ```
-   (`<encoded-cwd>` = cwd with `/` and spaces → `-`.) Then `mkdir -p ~/.claude/tts-sessions`; target file is `~/.claude/tts-sessions/<session_id>.json`.
+   (`<encoded-cwd>` = cwd with `/` and spaces → `-`.) Pass it as `--session <id>`.
 
-   **Write by merging, never clobbering:** read the target file's existing JSON (absent/invalid = `{}`), set just the one key (`"mode"`, `"collision"`, `"tab_color"`, `"raise"`, …), write it back. All of these keys live in the same files.
+   Echo what `--set` prints rather than claiming success yourself — it reports the
+   key, the value and the scope it wrote, and it refuses invalid values.
 
-4. Report state: from `~/.claude/tts-state.json` the global `mode` (absent = `summary`), `collision` (absent = `chime`), `summary_chars` (absent = `adaptive`), `tab_color` (absent = `red`), and `raise` (absent = `window`), plus this session's overrides from `~/.claude/tts-sessions/<session_id>.json` (absent = follows global), e.g. "TTS: this session = full (override), global default = summary, length = adaptive, collision = follow (global), color = red, raise = window".
+   **After setting `raise window`,** also run `--check-raise` and report its line:
+   raising silently does nothing until Accessibility is granted to the terminal app.
+
+4. Report state by running `--settings --session <id>` and summarizing it in a line
+   or two (it prints every key, its value, and whether that came from this session,
+   global, or the default).
 
 5. If mode is `off` for this session, stop ending responses with the 🔊 line until it's turned back on. If `full`, the 🔊 line is unnecessary — drop it (the hook strips it anyway).
 
