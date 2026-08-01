@@ -1,0 +1,10 @@
+# macOS Finder droppings
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Build output (the installer compiles these into ~/.claude/scripts)
+av-status
+speaking-badge
