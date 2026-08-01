@@ -57,7 +57,8 @@ Type **`repeat`** (or **`rr`**) and the last summary plays again. It costs nothi
 | `repeat inverse` | Whichever rendering you *didn't* get — full if you're in `summary` mode, summary if you're in `full` |
 | `repeat all` / `rr all` | Every session's unplayed summaries |
 | `repeat status` | Lists this session's queue, speaks nothing |
-| `repeat stop` | Shut the voice up right now |
+| `repeat stop` / `shh` / `hush` | Shut the voice up right now |
+| `stop` | Same — but only while the voice is talking; otherwise it's your prompt |
 
 `full` and `inverse` are free too. The hook payload carries this session's transcript path, so the response is re-rendered from disk with the same sanitizer that spoke it — heard the summary, want the detail? You get it without a model call.
 
@@ -99,7 +100,7 @@ Follow mode only auto-reads summaries queued by follow-mode sessions in the last
 
 ## On a call? It stays quiet
 
-If your **microphone or camera is actively in use** — a Zoom/Teams/FaceTime call, a Meet tab, a screen recording — the hook says nothing at all (not even the chime) and just queues the summary. Run `/spoken-recap` after the call to hear what you missed.
+If your **microphone or camera is actively in use** — a Zoom/Teams/FaceTime call, a Meet tab, a screen recording — the hook says nothing at all (not even the chime) and just queues the summary. A chime that was deferred behind another readout re-checks at the moment it would actually play, so a call starting *during* the wait still silences it. Run `/spoken-recap` after the call to hear what you missed.
 
 Detection uses a tiny compiled helper (`scripts/av-status.c`, built by the installer) that reads the same CoreAudio/CoreMediaIO signals behind the orange and green menu-bar dots, so it works for any app, including browser-tab calls. It needs no mic/camera permissions and never touches the devices itself. If the helper isn't built (no Xcode Command Line Tools), speech simply always plays.
 

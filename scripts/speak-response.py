@@ -995,21 +995,45 @@ def badge(text, session_id=None):
         pass
 
 
+CHIME_SOUND = "/System/Library/Sounds/Glass.aiff"
+
+
 def chime(after_pid=None, session_id=None):
     """A soft "something arrived" tone. `/tts chime off` silences it.
 
-    Waits out `after_pid` first when given, so the chime never lands on
-    top of a readout already in progress and mask it.
+    Never plays while the mic or camera is live — a chime in a meeting is
+    worse than a missed summary. A deferred chime (one waiting out a
+    readout in progress so it doesn't mask it) re-checks that at the
+    moment it would actually play, not just when it was scheduled: a call
+    can easily start during the wait.
     """
     if resolve_setting(session_id, "chime", ("on", "off"), "on") == "off":
         return
-    play = "/usr/bin/afplay -v 0.5 /System/Library/Sounds/Glass.aiff"
+    if on_call():
+        return
     if after_pid:
-        play = (f"while kill -0 {after_pid} 2>/dev/null; do sleep 0.3; done; "
-                + play)
+        subprocess.Popen([sys.executable, os.path.abspath(__file__),
+                          "--chime", "--after", str(after_pid)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        return
+    play_chime()
+
+
+def play_chime(after_pid=None):
+    """Play the tone, optionally after `after_pid` finishes speaking.
+    Silent if a call has started by the time the wait is over."""
+    deadline = time.time() + 900
+    while after_pid and time.time() < deadline:
+        if not still_speaking(after_pid):
+            break
+        time.sleep(0.3)
+    if on_call():
+        return
     try:
-        subprocess.Popen(["/bin/sh", "-c", play], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
+        subprocess.Popen(["/usr/bin/afplay", "-v", "0.5", CHIME_SOUND],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
     except OSError:
         pass
 
@@ -1261,6 +1285,9 @@ if __name__ == "__main__":
             repair()
         elif "--watch" in sys.argv:
             watch()
+        elif "--chime" in sys.argv:
+            after = _arg("--after")
+            play_chime(int(after) if after and after.isdigit() else None)
         elif "--settings" in sys.argv:
             show_settings(_arg("--session"))
         elif "--set" in sys.argv:

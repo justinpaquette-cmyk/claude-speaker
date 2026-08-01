@@ -15,7 +15,9 @@ nothing to look at.
   repeat inverse         this turn in whichever rendering you did NOT get:
                          full if you are in summary mode, summary if full
   repeat status          list this session's queue, speak nothing
-  repeat stop            shut the voice up right now
+  repeat stop / shh      shut the voice up right now
+  stop                   same, but only while the voice is actually
+                         talking — otherwise it is your prompt, not ours
 
 `full` and `inverse` cost nothing either: the hook payload carries this
 session's transcript path, so the response is re-rendered from the
@@ -56,7 +58,18 @@ TRIGGERS = {"rr": "latest", "repeat": "latest",
             "rr status": "status", "repeat status": "status",
             "rr full": "full", "repeat full": "full",
             "rr inverse": "inverse", "repeat inverse": "inverse",
-            "rr stop": "stop", "repeat stop": "stop"}
+            "rr stop": "stop", "repeat stop": "stop",
+            # One-word kill switch. Deliberately NOT bound to Esc: Esc
+            # already interrupts the agent, and a key that sometimes
+            # cancels your work and sometimes just silences audio is a
+            # key you stop trusting. "shh" is three characters and can
+            # never be mistaken for a real prompt.
+            "shh": "stop", "hush": "stop",
+            # Bare "stop" is ambiguous — it is also a perfectly normal
+            # thing to say to Claude. So it only silences the voice WHEN
+            # THE VOICE IS TALKING; otherwise it falls through and is
+            # handled as the instruction it plainly was.
+            "stop": "stop-if-speaking"}
 SPEAKER = os.path.expanduser("~/.claude/scripts/speak-response.py")
 
 
@@ -151,6 +164,10 @@ def main():
     kind = TRIGGERS.get((payload.get("prompt") or "").strip().lower())
     if kind is None:
         return 0  # not for us — hand the prompt to Claude untouched
+    if kind == "stop-if-speaking":
+        if not busy():
+            return 0  # nothing talking — you meant it for Claude
+        kind = "stop"
     if kind == "stop":
         print(stop_speaking(), file=sys.stderr)
         return 2
