@@ -32,7 +32,7 @@ Nothing to do — responses just speak. Control it with two slash commands:
 | `/tts collision chime [global]` | Back to chime-and-queue (default) |
 | `/tts name <spoken name>` | Fallback spoken name for this project's terminals |
 | `/tts color <color\|off>` | Tint shown while this terminal speaks (default `red`) |
-| `/tts raise <window\|off>` | Raise the speaking window, focus untouched (default `window`) |
+| `/tts raise <window\|off>` | Opt-in: raise the speaking window (default `off`) |
 
 **What the voice calls a terminal:** its session title — set one with Claude Code's built-in `/rename` (auto titles work too) — else the `/tts name` custom name, else the project folder name. Titles and folder names are humanized for speech (camelCase/dashes split into words).
 | `/spoken-recap` | Replay this session's queued summaries |
@@ -41,10 +41,10 @@ Nothing to do — responses just speak. Control it with two slash commands:
 
 ## See which session is talking
 
-While a summary is being read, that terminal **turns red** and its window is **raised to the top** — then the color goes right back to normal when the voice stops. With several sessions running you can look up mid-sentence and know which one is speaking.
+While a summary is being read, that terminal **turns red** — and goes right back to normal when the voice stops. With several sessions running you can look up mid-sentence and know which one is speaking. Nothing moves, nothing takes your keyboard.
 
 - **Tint** — Terminal.app tab background (AppleScript, matched by tty) or iTerm2 tab color (OSC 6). Any other emulator just skips the tint and still speaks. `/tts color <red|orange|yellow|green|blue|purple|#rrggbb|off>`.
-- **Raise** — System Events `AXRaise`, never `activate` (which would yank focus out of another app). AXRaise doesn't cross apps, but it *does* make the raised window key inside its own app — so the raise is **skipped whenever your terminal app is frontmost**. If you're typing in a terminal window, nothing moves; the raise only fires when you're off in another app. `/tts raise off` turns it off entirely.
+- **Raise** (`/tts raise window`, **off by default**) — brings the speaking window to the top via System Events `AXRaise`; `activate` is never used. It stays opt-in because macOS offers no raise that is guaranteed focus-free: AXRaise doesn't cross apps, but inside an app the raised window becomes *key*, so the next thing you type in that app can land there. It is skipped whenever your terminal app is frontmost, so typing in a terminal is never interrupted. Want zero window movement? Leave it off.
 - Raising needs **Accessibility** permission for your terminal app (System Settings → Privacy & Security → Accessibility). Without it the raise silently does nothing; `python3 ~/.claude/scripts/speak-response.py --check-raise` tells you which state you're in.
 - The pre-speech color is parked in `~/.claude/tts-tabcolor/<tty>.json`, so a killed watcher can't leave a terminal stuck red — the next hook run puts it back.
 
@@ -73,7 +73,7 @@ response finishes ──▶ Stop hook (speak-response.py)
                         │  logs to ~/.claude/tts-queue.jsonl
                         ├─ mic/camera in use ──▶ full silence + queue for /spoken-recap
                         ├─ voice idle ──▶ /usr/bin/say  (on-device Apple TTS)
-                        │                  + tab turns red & window raises, restored after
+                        │                  + tab turns red for the readout, restored after
                         └─ voice busy ──▶ deferred chime + queue for /spoken-recap
 ```
 

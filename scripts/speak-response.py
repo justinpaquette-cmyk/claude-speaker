@@ -106,7 +106,9 @@ def resolve_collision(session_id):
 
 
 def resolve_raise(session_id):
-    return resolve_setting(session_id, "raise", RAISES, "window")
+    # Default OFF: raising a window can never be guaranteed focus-free —
+    # see raise_window(). The tint is the cue; the raise is opt-in.
+    return resolve_setting(session_id, "raise", RAISES, "off")
 
 
 def explicit_summary_cap(session_id):
@@ -492,14 +494,16 @@ def frontmost_app():
 def raise_window(tty, term):
     """Bring the speaking terminal's window to the top of the stack.
 
-    Two rules keep the keyboard where it is. `activate` is never used —
-    it would yank focus out of another app. And AXRaise, which does not
-    cross apps, still makes the raised window KEY within its own app, so
-    it is skipped entirely whenever the terminal app is already frontmost:
-    if you are typing in any terminal window, nothing moves. The raise
-    only fires when your attention is elsewhere, which is the case it is
-    for. Needs Accessibility permission for the terminal app; without it
-    this silently does nothing (`speak-response.py --check-raise` says so).
+    OFF BY DEFAULT, and opt-in only, because macOS gives no way to raise a
+    window that is guaranteed not to take the keyboard: AXRaise does not
+    cross apps (and `activate`, which would, is never used), but inside an
+    app the raised window becomes KEY — so the next thing you type in that
+    app goes to it, not to the window you left. Two guards narrow that as
+    far as it can go: skip the raise whenever the terminal app is already
+    frontmost (typing in a terminal never gets pulled), and never raise
+    from anywhere else. If you want zero window movement, leave it off.
+    Needs Accessibility permission for the terminal app; without it this
+    silently does nothing (`speak-response.py --check-raise` says so).
     """
     proc = AX_PROCESS.get(term)
     if not proc or not tty:
