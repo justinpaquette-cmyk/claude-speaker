@@ -56,14 +56,20 @@ looking at, so tinting it would be noise. Switch away from an open question
 and it goes purple; switch back and the tint drops (the question stays open
 either way). When it first opens unfocused, the question's headers are read
 aloud (`ask_speak`), so you know what is being asked without looking. Both
-off via `/tts ask_color off` / `/tts ask_speak off`.
+off via `/tts ask_color off` / `/tts ask_speak off`. A question closed
+WITHOUT an answer (typed over, interrupted) fires no close hook; its marker
+is dropped as soon as the session's transcript moves on without it —
+otherwise a long turn would sit purple for its whole run and click-ins
+would re-read a dead question. Answering a question also stops any readout
+of it still mid-sentence.
 Focus a waiting terminal and it reads out on the spot, whatever its age,
 then goes back to its own color — the newest `recap_max` (3) of what it
 holds, oldest-first inside that window so the last thing you hear is the
 newest, with anything older counted rather than read ("8 older updates
 skipped"). Focus a terminal holding an open QUESTION and it reads the
-question out too, options included, up to `ask_reads` (3) times — the state
-that means you are the blocker is the one most worth hearing on demand.
+question out too, options included, once by default (`ask_reads` raises
+it) — the state that means you are the blocker is the one most worth
+hearing on demand.
 The aging and the focus read are done by a single locked
 watcher (`speak-response.py --watch`) that starts when something first
 has to wait and exits as soon as the queue is clear — nothing polls in
@@ -85,6 +91,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -126,11 +133,17 @@ RECAP_MAX_DEFAULT = 3
 # and background-only — see the module docstring.
 ASK_TAB_COLOR = "purple"
 ASK_MAX_AGE_SECS = 86400  # forget an ask marker nothing ever closed
-# Times clicking into a terminal re-reads the question it is holding. It
-# stops after this because the question is on screen in front of you by
-# then; the purple tab still comes back, because that tracks the question
+# How long the transcript may keep growing after a question opens before
+# growth means the question is over. The tool_use entry itself can flush
+# a beat after the marker is written; anything later means the turn moved
+# on — an open question BLOCKS the session, so its transcript sits still.
+ASK_STALE_GRACE_SECS = 10
+# Times clicking into a terminal re-reads the question it is holding.
+# Once: the click that focused the tab put the question on screen, and
+# repeating it is nagging — `/tts ask_reads N` for more. The purple tab
+# still comes back on every switch away, because that tracks the question
 # being OPEN, not unheard.
-ASK_READS_DEFAULT = 3
+ASK_READS_DEFAULT = 1
 WATCH_LOCK = os.path.join(CLAUDE_DIR, "scripts", ".tts-watch.lock")
 BADGE_FILE = os.path.join(CLAUDE_DIR, "tts-badge.txt")
 BADGE_HELPER = os.path.join(CLAUDE_DIR, "scripts", "speaking-badge")
@@ -896,14 +909,67 @@ def live_asks():
         except (OSError, ValueError):
             rec = None
         if not isinstance(rec, dict) or rec.get("ts", 0) < cutoff \
-                or not _alive(rec.get("owner_pid")):
+                or not _alive(rec.get("owner_pid")) or _ask_dismissed(rec):
             try:
                 os.remove(_ask_path(tty))
             except OSError:
                 pass
+            _silence_ask(rec)
+            if (_read_restore(tty) or {}).get("state") == "asking":
+                tint_stop(tty)
             continue
         out[tty] = rec
     return out
+
+
+def _ask_dismissed(rec):
+    """True when the session moved on from this question without answering.
+
+    A question dismissed by typing over it (or interrupted) fires no
+    PostToolUse, and the Stop-hook clear only comes when the turn ends —
+    which for a long agent turn can be an hour of purple and of click-ins
+    re-reading a dead question. While a question is genuinely open the
+    session is BLOCKED on it, so its transcript sits still; the transcript
+    growing past the marker (plus a flush grace) means the turn moved on.
+    (A background task appending mid-question can trip this early — that
+    costs the purple cue, the cheap side of the trade.)
+    """
+    transcript = rec.get("transcript") if isinstance(rec, dict) else None
+    if not transcript:
+        return False  # older marker, no transcript recorded: age/pid only
+    try:
+        return os.path.getmtime(transcript) > rec.get("ts", 0) + ASK_STALE_GRACE_SECS
+    except OSError:
+        return False
+
+
+def _silence_ask(rec):
+    """Stop a `say` still reading this question aloud. Closing the question
+    is the one unambiguous "I have it" — the voice should stop with it."""
+    pid = rec.get("say_pid") if isinstance(rec, dict) else None
+    if still_speaking(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
+def _mark_ask_say(tty, ts, pid):
+    """Record the `say` reading a question in its marker, so whatever
+    closes the question can also silence it. Left alone if the marker
+    has been replaced by a newer question in the meantime."""
+    try:
+        with open(_ask_path(tty)) as f:
+            rec = json.load(f)
+    except (OSError, ValueError):
+        return
+    if isinstance(rec, dict) and rec.get("ts") == ts:
+        rec["say_pid"] = pid
+        try:
+            with open(_ask_path(tty), "w") as f:
+                json.dump(rec, f)
+        except OSError:
+            pass
 
 
 def _alive(pid):
@@ -953,6 +1019,7 @@ def ask_open(payload):
     title = session_name(session_id)
     rec = {"tty": tty, "term": os.environ.get("TERM_PROGRAM") or "",
            "session": session_id, "ts": int(time.time()),
+           "transcript": payload.get("transcript_path") or "",
            "owner_pid": owner_pid, "project": project,
            "headers": [h for h in headers if h],
            "questions": [a for a in asked if a["q"]],
@@ -1027,6 +1094,7 @@ def speak_ask(rec):
             f.write(str(proc.pid))
     except OSError:
         pass
+    _mark_ask_say(rec.get("tty"), rec.get("ts"), proc.pid)
 
 
 ASK_ORDINALS = ("one", "two", "three", "four")
@@ -1110,18 +1178,42 @@ def speak_ask_on_focus(tty, rec):
             f.write(str(proc.pid))
     except OSError:
         pass
+    _mark_ask_say(tty, rec.get("ts"), proc.pid)
 
 
 def ask_clear(tty):
-    """The question is answered (or the turn ended): drop marker and tint."""
+    """The question is answered (or the turn ended): drop marker and tint,
+    and stop any readout of the question still mid-sentence — answering
+    from the ask UI is the way to shut it up."""
     if not tty:
         return
+    try:
+        with open(_ask_path(tty)) as f:
+            rec = json.load(f)
+    except (OSError, ValueError):
+        rec = None
     try:
         os.remove(_ask_path(tty))
     except OSError:
         pass
+    _silence_ask(rec)
     if (_read_restore(tty) or {}).get("state") == "asking":
         tint_stop(tty)
+
+
+def _asking_tints():
+    """Every tty whose current tint record says "asking"."""
+    try:
+        files = os.listdir(TABCOLOR_DIR)
+    except OSError:
+        return []
+    ttys = []
+    for fn in files:
+        if fn.endswith(".json"):
+            tty = "/dev/" + fn[:-len(".json")]
+            if (_read_restore(tty) or {}).get("state") == "asking":
+                ttys.append(tty)
+    return ttys
 
 
 def still_speaking(pid):
@@ -1325,6 +1417,16 @@ def watch():
                     tint_stop(tty)
             else:
                 ask_paint(tty, rec)
+        # A tab can be left purple with no live question behind it: an
+        # ask_clear (or a stale-marker drop) can land between this loop's
+        # live_asks() snapshot and its repaint, painting the answered
+        # question right back. The loops here never touch such a tab and
+        # restore_stale() only runs once EVERYTHING is clear — so while
+        # other work keeps the watcher alive, the purple would sit for
+        # hours. Sweep it every poll instead.
+        for tty in _asking_tints():
+            if tty not in asking:
+                tint_stop(tty)
         for tty, queued in waiting.items():
             if tty in asking:
                 continue  # a live question outranks a summary on the same tab

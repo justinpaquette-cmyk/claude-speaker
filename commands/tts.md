@@ -67,11 +67,11 @@ of waiting):
   Question one: Which readouts should the cap apply to? Options: click-in and
   bare recap; click-in only; bare recap only"), labels only because the
   descriptions are on screen. Summaries have click-to-talk; the one state that
-  means *you* are the blocker should too. `ask_reads` (default `3`) caps how
-  many times a later click-in repeats it — past that it stays silent, because
-  by then it has been in front of you a while. The purple tab still comes back
-  every time you switch away: that tracks the question being *open*, not
-  unheard.
+  means *you* are the blocker should too. `ask_reads` (default `1`) caps how
+  many click-ins read it — once by default, because the click that focused the
+  tab put the question on screen and repeating it is nagging. The purple tab
+  still comes back every time you switch away: that tracks the question being
+  *open*, not unheard. Answering the question stops a readout mid-sentence.
 - The click-in read is **not** silenced by `hold`, unlike the unfocused cue
   above: `hold` governs unprompted speech at a terminal you aren't watching,
   and clicking in is you asking — the same reason a click-in summary isn't
@@ -119,7 +119,7 @@ Scope: **this session** by default; add `global` to set the default for all sess
 `/tts ask-speak <on|off> [global]` — read the question's headers aloud when one opens unfocused (`hold` silences it regardless).
 `/tts focus <on|off> [global]` — read out when you click into a waiting terminal.
 `/tts recap_max <n> [global]` — how many updates a backlog readout speaks (default 3; `rr <n>` / `rr <n>m` are never capped).
-`/tts ask_reads <n> [global]` — how many times clicking into an open question re-reads it (default 3).
+`/tts ask_reads <n> [global]` — how many times clicking into an open question re-reads it (default 1).
 `/tts menubar <on|off> [global]` — menu-bar indicator.
 `/tts notify <on|off> [global]` — banner for summaries that had to wait.
 `/tts raise <window|off> [global]` — raise the speaking window (no focus steal).
