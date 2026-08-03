@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 /* Process-level input state (macOS 14+). Define the four-char selectors
  * ourselves so this also compiles against older SDK headers. */
@@ -33,17 +34,29 @@
  * call. The first two were confirmed empirically (2026-08-02: with Voice
  * Control on and no call running, the only two processes with input
  * running were com.apple.SpeechRecognitionCore.speechrecognitiond and
- * com.apple.inputmethod.ironwood — no conferencing app anywhere). The rest
- * are the same Apple dictation/assistant namespace by inspection, not
- * separately observed live, included on the same reasoning rather than
- * waiting to hit each one. Without this exclusion, Voice Control's own
- * listening makes on_call() permanently true and claude-speaker never
- * speaks again. A real Zoom/Teams/FaceTime/browser call still shows its
- * own distinct bundle ID and is unaffected. */
+ * com.apple.inputmethod.ironwood — no conferencing app anywhere). Without
+ * this exclusion, Voice Control's own listening makes on_call()
+ * permanently true and claude-speaker never speaks again. A real
+ * Zoom/Teams/FaceTime/browser call still shows its own distinct bundle ID
+ * and is unaffected.
+ *
+ * These are BUNDLE IDs, which are not the daemon's executable name — a
+ * distinction worth stating because it already bit this list once. The
+ * CoreSpeech daemon runs as `corespeechd`, but the bundle ID this code
+ * compares against is com.apple.CoreSpeech, so a "com.apple.corespeechd"
+ * entry silently matches nothing. Every prefix below was read back off a
+ * live kAudioProcessPropertyBundleID enumeration (2026-08-03) rather than
+ * guessed from a process listing. com.apple.accessibility covers Voice
+ * Control's own `heard` daemon (com.apple.accessibility.heard), which is
+ * the single most on-the-nose candidate for the bug this fixes and was
+ * missing entirely. Matching is case-insensitive because Apple's own
+ * casing in this namespace is not consistent (CoreSpeech vs inputmethod). */
 static const char *DICTATION_INFRA[] = {
     "com.apple.SpeechRecognitionCore",
     "com.apple.inputmethod",
-    "com.apple.corespeechd",
+    "com.apple.CoreSpeech",
+    "com.apple.accessibility",
+    "com.apple.universalaccessd",
     "com.apple.assistant",
     "com.apple.Siri",
     NULL};
@@ -60,8 +73,10 @@ static int is_dictation_infra(AudioObjectID proc_obj) {
     char buf[256] = "";
     CFStringGetCString(bundle_id, buf, sizeof(buf), kCFStringEncodingUTF8);
     CFRelease(bundle_id);
+    if (!buf[0]) return 0;  /* unreadable: treat as a real mic user */
     for (int i = 0; DICTATION_INFRA[i]; i++)
-        if (strncmp(buf, DICTATION_INFRA[i], strlen(DICTATION_INFRA[i])) == 0)
+        if (strncasecmp(buf, DICTATION_INFRA[i],
+                        strlen(DICTATION_INFRA[i])) == 0)
             return 1;
     return 0;
 }
