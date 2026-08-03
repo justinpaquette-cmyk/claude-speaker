@@ -106,6 +106,20 @@ heard.
 **Chime** — `chime` (default `on`): the soft arrival tone. `/tts chime off` makes
 waiting summaries completely silent, color only.
 
+**Voice** — `voice` (default `default`, macOS's own system voice): which
+`say -v` voice speaks. Validated against `say -v ?`'s installed list at set
+time — an unrecognized name is rejected immediately, because `say -v <bad
+name>` otherwise exits silently with no audio and no error, forever. `default`
+clears the override.
+
+**Rate** — `rate` (default `default`, macOS's own system rate, ~175–200 wpm):
+words per minute passed to `say -r`. The plain `say` invocation does **not**
+inherit System Settings' Accessibility/Spoken Content rate slider — that is a
+different preference domain — so this is the only lever that actually changes
+claude-speaker's speed. No built-in way back to the system rate once set
+besides overwriting it with another number or deleting the key from
+`tts-state.json` / the session file.
+
 Scope: **this session** by default; add `global` to set the default for all sessions.
 
 ## Usage
@@ -123,6 +137,8 @@ Scope: **this session** by default; add `global` to set the default for all sess
 `/tts menubar <on|off> [global]` — menu-bar indicator.
 `/tts notify <on|off> [global]` — banner for summaries that had to wait.
 `/tts raise <window|off> [global]` — raise the speaking window (no focus steal).
+`/tts voice <name|default> [global]` — which `say` voice speaks (`say -v ?` for the installed list).
+`/tts rate <n|default> [global]` — words per minute for `say -r`.
 `/tts name <spoken name>` — how the voice announces THIS project (e.g. `/tts name the docs terminal`).
 No argument = report current state.
 `/tts-wizard` — guided tour of every feature with pick-from-a-list configuration.
@@ -141,9 +157,10 @@ python3 ~/.claude/scripts/speak-response.py --set <key> <value> [--session <id>]
    `length`→`summary_chars`, `color`→`tab_color`, `ask`→`ask_color`,
    `ask-speak`→`ask_speak`, `focus`→`focus_speak`,
    `recap_max`/`recap-max`→`recap_max`, `ask_reads`/`ask-reads`→`ask_reads`,
-   `menubar`→`menubar`, `notify`→`notify`, `raise`→`raise`; anything else that is
-   a valid mode (`off`/`summary`/`full`) means `mode`. No valid argument → skip to
-   step 4 (report only). `name` is special — see below.
+   `menubar`→`menubar`, `notify`→`notify`, `raise`→`raise`, `voice`→`voice`,
+   `rate`→`rate`; anything else that is a valid mode (`off`/`summary`/`full`)
+   means `mode`. No valid argument → skip to step 4 (report only). `name` is
+   special — see below.
 
    **`name`:** merge into `~/.claude/tts-state.json` (always global) a `"names"` map entry keyed by the basename of the current working directory, value = the given spoken name, e.g. `{"names": {"retoolBot": "the retool terminal"}}`. Read-modify-write, preserving all other keys. Then report and stop.
 

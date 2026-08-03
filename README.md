@@ -116,6 +116,8 @@ Detection uses a tiny compiled helper (`scripts/av-status.c`) reading the same C
 | `/tts recap_max <n>` | Updates a backlog readout speaks (default 3; `repeat 10` is never capped) |
 | `/tts ask_reads <n>` | Times clicking into an open question re-reads it (default 3) |
 | `/tts raise <window\|off>` | Opt-in window raise (see caveat below) |
+| `/tts voice <name\|default>` | Which `say` voice speaks — `say -v ?` lists what's installed |
+| `/tts rate <n\|default>` | Words per minute for `say -r` (default: the system rate — plain `say` does not inherit the Accessibility rate slider) |
 | `/tts name <spoken name>` | What the voice calls this project's terminals |
 | `/spoken-recap [status\|all]` | Replay a queue, list it, or replay every session's |
 
