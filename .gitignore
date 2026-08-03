@@ -8,3 +8,7 @@ __pycache__/
 # Build output (the installer compiles these into ~/.claude/scripts)
 av-status
 speaking-badge
+# Half-built av-status from the runtime rebuild. It unlinks its own temp,
+# so one only survives if the build was killed mid-flight — and only lands
+# here at all when CLAUDE_DIR points into the repo, as it does under test.
+av-status.new.*
