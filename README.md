@@ -102,6 +102,8 @@ Only those exact strings are intercepted — *"repeat full coverage for the auth
 
 If your **microphone or camera is in use** — Zoom, Teams, FaceTime, a Meet tab, a screen recording — nothing plays at all, not even the chime. The summary just waits. A chime already deferred behind another readout re-checks at the moment it would actually play, so a call starting *during* the wait still silences it.
 
+**When the call ends, the tab you're sitting on reads out what it took during it.** A summary that landed while you sat still through a meeting has no focus transition to hang a read off — that's what leaves a tab tinted red with nothing coming — so the call ending is treated as a focus-in on wherever you are. Only on that tab: a meeting ending must never start a voice at a terminal across the desk. Everything held elsewhere keeps its tint and waits to be clicked into, exactly as before.
+
 Detection uses a tiny compiled helper (`scripts/av-status.c`) reading the same CoreAudio/CoreMediaIO signals behind the orange and green menu-bar dots, so it covers any app including browser-tab calls. It needs no mic or camera permission and never touches the devices. Not built (no Xcode Command Line Tools)? Speech simply always plays.
 
 ## Commands

@@ -37,8 +37,13 @@ Any waiting summary can also be replayed with `repeat`/`rr` or
 /spoken-recap (scripts/tts-recap.py).
 If the mic or camera is
 live (a call, a recording — checked via the compiled av-status helper),
-nothing plays at all, not even the chime; the entry just queues. Always
-exits 0 — TTS must never block the session.
+nothing plays at all, not even the chime; the entry just queues. When the
+call ENDS, the terminal you are sitting on reads out what it took during
+it — the call ending counts as a focus-in on that tab, since a summary
+that landed while you sat still had no transition to hang a read off and
+would otherwise sit tinted until you happened to click away and back.
+Only that tab: a call ending must never start a voice across the desk.
+Always exits 0 — TTS must never block the session.
 
 Visual cue (Terminal.app tab background via AppleScript, iTerm2 tab color
 via OSC 6; any other emulator just speaks). The terminal itself tells you
@@ -1864,6 +1869,11 @@ def watch():
     owed = None
     ask_owed = None
     badge_cleared = False
+    # Seeded from the real state, for the same reason last_focus is: a
+    # watcher that starts up mid-call must see the call END as an edge,
+    # and one that starts with the mic cold must not invent an edge on its
+    # first poll and read at a terminal nobody asked.
+    was_calling = on_call()
     while True:
         entries = load_queue()
         waiting = pending_by_tty(entries)
@@ -1883,6 +1893,30 @@ def watch():
             return
         now = time.time()
         focus = focused_tty()
+        # Once per poll: on_call() shells out to the av helper, and three
+        # separate readout gates below ask the same question.
+        calling = on_call()
+        # A call suppresses every readout at the source — the Stop hook
+        # queues silently, an opening question neither speaks nor tints.
+        # Nothing is owed for it, because being owed a read hangs off a
+        # focus TRANSITION and sitting still through a meeting is not one.
+        # So a summary that landed at the tab you were already on, during a
+        # call, had nobody to deliver it: the tint ages to red and stays
+        # there until you happen to click away and back. The call ending is
+        # the moment that terminal becomes deliverable again — treat it as
+        # a fresh focus-in on wherever you are sitting.
+        #
+        # Seeded from `focus` and nothing else, so this can only ever read
+        # the tab you are LOOKING at: a call ending must not start a voice
+        # at a terminal across the desk, which is the whole reason the
+        # focus model (and `hold`) exists. Anything held elsewhere keeps
+        # its tint and waits to be clicked into, exactly as before.
+        if was_calling and not calling:
+            if focus in waiting:
+                owed = focus
+            if focus in asking:
+                ask_owed = focus
+        was_calling = calling
         if active_say_pid() is None:  # a live readout owns the badge instead
             if waiting:
                 oldest = min(e.get("ts", now) for q in waiting.values() for e in q)
@@ -1963,7 +1997,7 @@ def watch():
             if left and _silence_ask(left):
                 _unhear_cut(last_focus, left)
             last_focus = focus
-        if owed and owed in waiting and active_say_pid() is None and not on_call():
+        if owed and owed in waiting and active_say_pid() is None and not calling:
             ready = [e for e in waiting[owed]
                      if resolve_setting(e.get("session"), "focus_speak",
                                         ("on", "off"), "on") == "on"]
@@ -1977,12 +2011,12 @@ def watch():
         # click-cursor below stays quiet; when it cannot tell, a click-in
         # falls through to the cursor.
         cur = asking.get(focus)
-        if cur and not on_call() \
+        if cur and not calling \
                 and resolve_ask_follow(cur.get("session")) == "screen" \
                 and ask_screen_follow(focus, cur, ask_owed == focus):
             ask_owed = None
         if ask_owed and ask_owed in asking and active_say_pid() is None \
-                and not on_call():
+                and not calling:
             speak_ask_on_focus(ask_owed, asking[ask_owed])
             ask_owed = None
         time.sleep(WATCH_POLL_SECS)
