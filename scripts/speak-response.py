@@ -122,6 +122,19 @@ STATE_FILE = os.path.join(CLAUDE_DIR, "tts-state.json")
 SESSION_DIR = os.path.join(CLAUDE_DIR, "tts-sessions")
 QUEUE_FILE = os.path.join(CLAUDE_DIR, "tts-queue.jsonl")
 AV_HELPER = os.path.join(CLAUDE_DIR, "scripts", "av-status")
+# Where the C source for that helper lives. Under `install.sh --link` this
+# file is a symlink into the repo, so realpath() lands in the repo's
+# scripts/ and the source sits right next to it; under a plain `cp`
+# install it lands in ~/.claude/scripts, where no .c is ever copied, and
+# the staleness check below finds nothing and does nothing. That asymmetry
+# is correct: a copied install only changes when install.sh runs, and
+# install.sh already rebuilds. A linked install is the one that can drift,
+# because editing the .py is live instantly while the compiled helper is
+# whatever was last built.
+AV_SOURCE = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                         "av-status.c")
+AV_BUILD = ["cc", "-O2", "-o", None, AV_SOURCE, "-framework", "CoreAudio",
+            "-framework", "CoreMediaIO", "-framework", "CoreFoundation"]
 DRAIN_LOCK = os.path.join(CLAUDE_DIR, "scripts", ".tts-drain.lock")
 TABCOLOR_DIR = os.path.join(CLAUDE_DIR, "tts-tabcolor")
 ASKING_DIR = os.path.join(CLAUDE_DIR, "tts-asking")
@@ -469,6 +482,50 @@ def pick_speech(text, mode, cap):
     return _trim(sanitize(text), cap)
 
 
+def rebuild_av_if_stale():
+    """Recompile av-status when its source is newer than the binary.
+
+    The .py files go live the instant they are saved under a linked
+    install; av-status is COMPILED, so a C fix reaches nobody until
+    someone remembers to rebuild it. That asymmetry is invisible — the
+    helper keeps working, just with the old logic — which is the worst
+    shape for a bug to have. Nobody should have to know the tool has a
+    build step.
+
+    Costs two stat() calls on the common path. Builds to a temp file and
+    os.replace()s it, so a hook that fires mid-build reads either the old
+    binary or the new one, never a half-written one; concurrent builders
+    each write their own temp and the last replace wins, all of them
+    producing identical output, so no lock is needed. Every failure is
+    silent and leaves the existing binary alone: no compiler, no source
+    (copied install), unwritable directory, or a source that does not
+    compile all mean "keep using what we have", exactly as install.sh
+    treats a failed build as non-fatal.
+
+    A MISSING binary is deliberately not built here — only a stale one is
+    replaced. The first build belongs to install.sh, and attempting one on
+    every call when there is no compiler would spawn a doomed subprocess
+    on every single hook invocation.
+    """
+    try:
+        if os.path.getmtime(AV_SOURCE) <= os.path.getmtime(AV_HELPER):
+            return
+    except OSError:
+        return  # no source (copied install) or no binary yet — leave it
+    tmp = f"{AV_HELPER}.new.{os.getpid()}"
+    argv = [tmp if a is None else a for a in AV_BUILD]
+    try:
+        if subprocess.run(argv, capture_output=True,
+                          timeout=60).returncode == 0:
+            os.replace(tmp, AV_HELPER)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        os.unlink(tmp)  # no-op once the replace above consumed it
+    except OSError:
+        pass
+
+
 def on_call():
     """True if the mic or camera is actively in use (call, recording).
 
@@ -477,6 +534,7 @@ def on_call():
     FaceTime, and browser-tab calls alike. Missing helper or any failure
     means "not on a call": speech must degrade to normal, never to silence.
     """
+    rebuild_av_if_stale()
     if not os.access(AV_HELPER, os.X_OK):
         return False
     try:

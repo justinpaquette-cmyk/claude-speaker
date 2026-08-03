@@ -38,6 +38,17 @@ PY_MANAGED=(
   scripts/tts-recap.py
   scripts/repeat-hook.py
 )
+# Compiled helpers, as "source:binary". These are the one part of the
+# install that --link cannot keep live: linking a .py makes edits current
+# the instant they are saved, but a .c or .swift still has to be built,
+# so pulling a fix to either one leaves the old behavior running with
+# nothing to show for it. speak-response.py self-heals av-status at
+# runtime (rebuild_av_if_stale); the badge has no such hook, so for it
+# this report is the only warning you get.
+BUILT=(
+  "scripts/av-status.c:scripts/av-status"
+  "scripts/speaking-badge.swift:scripts/speaking-badge"
+)
 
 LINK=0
 CHECK=0
@@ -119,6 +130,24 @@ if [[ "$CHECK" == 1 ]]; then
     fi
   done
   echo
+  for pair in "${BUILT[@]}"; do
+    src="$REPO_DIR/${pair%%:*}"
+    bin="$HOME/.claude/${pair##*:}"
+    name="${pair##*:}"
+    if [[ ! -e "$bin" ]]; then
+      printf '  %-28s NOT BUILT\n' "$name"
+      bad=1
+    elif [[ "$src" -nt "$bin" ]]; then
+      # Not fatal for av-status, which rebuilds itself on next use, but
+      # still worth surfacing: until something triggers that, the running
+      # binary is older than the source it came from.
+      printf '  %-28s STALE (source is newer — rebuild)\n' "$name"
+      bad=1
+    else
+      printf '  %-28s built\n' "$name"
+    fi
+  done
+  echo
   if [[ "$bad" == 1 ]]; then
     echo "Not clean." >&2
     echo "  DRIFTED  an edit is live that git has never seen. Reconcile it" >&2
@@ -126,9 +155,14 @@ if [[ "$CHECK" == 1 ]]; then
     echo "           overwrites the installed copy." >&2
     echo "  BROKEN / LINKED ELSEWHERE / MISSING  the hook is not running this" >&2
     echo "           repo at all. Re-run install.sh (or --link) to repair." >&2
+    echo "  STALE / NOT BUILT  a compiled helper is older than its source." >&2
+    echo "           av-status rebuilds itself the next time speech checks" >&2
+    echo "           for a call; the badge needs install.sh. Linking cannot" >&2
+    echo "           fix these — a .c is never live the way a .py is." >&2
     exit 1
   fi
-  echo "Clean — the installed files match the repo and all scripts compile."
+  echo "Clean — the installed files match the repo, all scripts compile, and"
+  echo "the compiled helpers are newer than their sources."
   exit 0
 fi
 
