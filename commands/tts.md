@@ -64,14 +64,39 @@ of waiting):
   is, not an exception to it. The purple tab and the menu bar carry it instead.
 - **Click into a terminal holding an open question and it reads the question
   out** — the full text plus the option *labels* ("claude speaker is asking.
-  Question one: Which readouts should the cap apply to? Options: click-in and
-  bare recap; click-in only; bare recap only"), labels only because the
-  descriptions are on screen. Summaries have click-to-talk; the one state that
-  means *you* are the blocker should too. `ask_reads` (default `1`) caps how
-  many click-ins read it — once by default, because the click that focused the
-  tab put the question on screen and repeating it is nagging. The purple tab
-  still comes back every time you switch away: that tracks the question being
-  *open*, not unheard. Answering the question stops a readout mid-sentence.
+  Which readouts should the cap apply to? Options: click-in and bare recap;
+  click-in only; bare recap only"), labels only because the descriptions are
+  on screen. Summaries have click-to-talk; the one state that means *you* are
+  the blocker should too.
+- **A multi-question ask is followed one question at a time**, matching how
+  the UI shows them — `ask_follow` picks how. `screen` (the default, Terminal
+  .app and iTerm2): while you sit on the asking tab the watcher reads the
+  tab's visible text (one AppleScript query per 1.5s poll, *only* in that
+  state) and keeps the voice on the sub-question actually displayed — advance
+  with Enter, the arrow keys, or a click and it reads the next question,
+  cutting off the old readout the moment the screen moves on. `click`: no
+  screen reading; each click-in reads the next *unheard* question instead —
+  click in, hear one, switch away, click back, hear the next. `off`: click-ins
+  read the first question only. On an emulator whose screen can't be read,
+  `screen` quietly behaves like `click`. `ask_reads` (default `1`) caps how
+  often an already-heard set re-reads — once through by default, because
+  repeating questions that have been in front of you is nagging. The purple
+  tab still comes back every time you switch away: that tracks the question
+  being *open*, not unheard. Answering the question stops a readout
+  mid-sentence; so does switching away from the tab, or moving past the
+  question on screen — leaving it is the stop button. A question cut off
+  mid-sentence is un-heard: come back to it and it reads again (a fully-read
+  one stays quiet).
+- **The first read opens with the why** (`ask_context`, default `on`): before
+  question one, the voice speaks the words Claude wrote right before asking —
+  sanitized and capped exactly like a spoken summary (`/tts length` honored,
+  adaptive otherwise) — because the question text alone rarely says why it's
+  being asked. Option *descriptions* are still never read: those you can skim.
+- **`ask_first`** (default `off`): read question one the moment a set opens in
+  the tab you're already looking at, no click-in needed. Off by default
+  because a question that opens in front of you is already on screen — but
+  unlike a summary (which `rr` can replay), a question has no replay, so
+  hearing it immediately is a legitimate preference.
 - The click-in read is **not** silenced by `hold`, unlike the unfocused cue
   above: `hold` governs unprompted speech at a terminal you aren't watching,
   and clicking in is you asking — the same reason a click-in summary isn't
@@ -119,7 +144,10 @@ Scope: **this session** by default; add `global` to set the default for all sess
 `/tts ask-speak <on|off> [global]` — read the question's headers aloud when one opens unfocused (`hold` silences it regardless).
 `/tts focus <on|off> [global]` — read out when you click into a waiting terminal.
 `/tts recap_max <n> [global]` — how many updates a backlog readout speaks (default 3; `rr <n>` / `rr <n>m` are never capped).
-`/tts ask_reads <n> [global]` — how many times clicking into an open question re-reads it (default 1).
+`/tts ask_reads <n> [global]` — how many times an already-heard question set re-reads on click-in (default 1).
+`/tts ask_follow <screen|click|off> [global]` — how the voice advances through a multi-question ask: follow the question on screen (default), advance one question per click-in, or first question only.
+`/tts ask_first <on|off> [global]` — read question one aloud the moment a set opens in the tab you're looking at, no click-in needed (default off).
+`/tts ask_context <on|off> [global]` — before the first question, speak the words Claude wrote right before asking — the why (default on; capped like a summary).
 `/tts menubar <on|off> [global]` — menu-bar indicator.
 `/tts notify <on|off> [global]` — banner for summaries that had to wait.
 `/tts raise <window|off> [global]` — raise the speaking window (no focus steal).
@@ -141,6 +169,8 @@ python3 ~/.claude/scripts/speak-response.py --set <key> <value> [--session <id>]
    `length`→`summary_chars`, `color`→`tab_color`, `ask`→`ask_color`,
    `ask-speak`→`ask_speak`, `focus`→`focus_speak`,
    `recap_max`/`recap-max`→`recap_max`, `ask_reads`/`ask-reads`→`ask_reads`,
+   `ask_follow`/`ask-follow`→`ask_follow`, `ask_first`/`ask-first`→`ask_first`,
+   `ask_context`/`ask-context`→`ask_context`,
    `menubar`→`menubar`, `notify`→`notify`, `raise`→`raise`; anything else that is
    a valid mode (`off`/`summary`/`full`) means `mode`. No valid argument → skip to
    step 4 (report only). `name` is special — see below.

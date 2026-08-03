@@ -60,16 +60,30 @@ off via `/tts ask_color off` / `/tts ask_speak off`. A question closed
 WITHOUT an answer (typed over, interrupted) fires no close hook; its marker
 is dropped as soon as the session's transcript moves on without it —
 otherwise a long turn would sit purple for its whole run and click-ins
-would re-read a dead question. Answering a question also stops any readout
-of it still mid-sentence.
+would re-read a dead question. Answering a question stops any readout of
+it still mid-sentence, and so does switching away from the tab — those are
+the two stop gestures.
 Focus a waiting terminal and it reads out on the spot, whatever its age,
 then goes back to its own color — the newest `recap_max` (3) of what it
 holds, oldest-first inside that window so the last thing you hear is the
 newest, with anything older counted rather than read ("8 older updates
 skipped"). Focus a terminal holding an open QUESTION and it reads the
-question out too, options included, once by default (`ask_reads` raises
-it) — the state that means you are the blocker is the one most worth
-hearing on demand.
+question out too, options included — the state that means you are the
+blocker is the one most worth hearing on demand. A multi-question set is
+followed one question at a time, matching how the UI shows them
+(`ask_follow`): `screen` (default) reads the tab's visible text while you
+sit on it — one AppleScript query per 1.5s poll, ONLY in that state — and
+keeps the voice on the sub-question actually displayed, reading each new
+one as you advance (Enter, arrows, click alike) and cutting over the
+moment the screen moves on; `click` skips the scraping and each click-in
+reads the next unheard question instead; `off` is first-question-only.
+`screen` behaves like `click` wherever the screen cannot be read.
+`ask_reads` (default 1) caps how often an already-heard set re-reads; a
+readout cut mid-sentence (skipped past, switched away from) is un-heard
+and reads again on return. The set's first read opens with the words
+Claude wrote right before asking — the why, capped like a summary
+(`ask_context`, default on) — and `ask_first` (default off) reads
+question one the moment a set opens in the focused tab, no click needed.
 The aging and the focus read are done by a single locked
 watcher (`speak-response.py --watch`) that starts when something first
 has to wait and exits as soon as the queue is clear — nothing polls in
@@ -144,6 +158,20 @@ ASK_STALE_GRACE_SECS = 10
 # still comes back on every switch away, because that tracks the question
 # being OPEN, not unheard.
 ASK_READS_DEFAULT = 1
+# How the voice advances through a multi-question ask. `screen`: while you
+# sit on the asking tab, the watcher reads the tab's visible text (one
+# AppleScript query per poll, ONLY in that state) and keeps the voice on
+# the sub-question actually displayed — advance and it cuts over. `click`:
+# no scraping; each click-in reads the next unheard question instead.
+# `off`: click-ins read the first question only. `screen` quietly behaves
+# like `click` wherever the screen cannot be read (emulator without
+# AppleScript text access, scrape miss).
+ASK_FOLLOWS = ("screen", "click", "off")
+ASK_FOLLOW_DEFAULT = "screen"
+# A question is matched on this many normalized characters of its text —
+# and never on fewer than ASK_NEEDLE_MIN, which would match on noise.
+ASK_NEEDLE_CHARS = 40
+ASK_NEEDLE_MIN = 12
 WATCH_LOCK = os.path.join(CLAUDE_DIR, "scripts", ".tts-watch.lock")
 BADGE_FILE = os.path.join(CLAUDE_DIR, "tts-badge.txt")
 BADGE_HELPER = os.path.join(CLAUDE_DIR, "scripts", "speaking-badge")
@@ -244,6 +272,12 @@ def resolve_recap_max(session_id):
 def resolve_ask_reads(session_id):
     """How many times a click-in re-reads an open question."""
     return explicit_int(session_id, "ask_reads") or ASK_READS_DEFAULT
+
+
+def resolve_ask_follow(session_id):
+    """How the voice advances through a multi-question ask."""
+    return resolve_setting(session_id, "ask_follow", ASK_FOLLOWS,
+                           ASK_FOLLOW_DEFAULT)
 
 
 def last_assistant_text(transcript_path):
@@ -706,13 +740,16 @@ SETTABLE = {"mode": MODES, "collision": COLLISIONS, "chime": ("on", "off"),
             "notify": ("on", "off"), "raise": RAISES,
             "tab_color": "color", "ask_color": "color",
             "ask_speak": ("on", "off"), "summary_chars": "int",
-            "recap_max": "int", "ask_reads": "int"}
+            "recap_max": "int", "ask_reads": "int",
+            "ask_follow": ASK_FOLLOWS, "ask_first": ("on", "off"),
+            "ask_context": ("on", "off")}
 DEFAULTS = {"mode": "summary", "collision": "chime", "chime": "on",
             "focus_speak": "on", "menubar": "on", "notify": "on",
             "raise": "off", "tab_color": DEFAULT_TAB_COLOR,
             "ask_color": ASK_TAB_COLOR, "ask_speak": "on",
             "summary_chars": "adaptive", "recap_max": RECAP_MAX_DEFAULT,
-            "ask_reads": ASK_READS_DEFAULT}
+            "ask_reads": ASK_READS_DEFAULT, "ask_follow": ASK_FOLLOW_DEFAULT,
+            "ask_first": "off", "ask_context": "on"}
 
 
 def _settings_path(session_id):
@@ -945,13 +982,45 @@ def _ask_dismissed(rec):
 
 def _silence_ask(rec):
     """Stop a `say` still reading this question aloud. Closing the question
-    is the one unambiguous "I have it" — the voice should stop with it."""
+    is the one unambiguous "I have it" — the voice should stop with it.
+    Returns True when it actually cut a live readout short."""
     pid = rec.get("say_pid") if isinstance(rec, dict) else None
     if still_speaking(pid):
         try:
             os.kill(pid, signal.SIGTERM)
+            return True
         except OSError:
             pass
+    return False
+
+
+def _unhear_cut(tty, rec):
+    """A readout was cut mid-sentence: take back the heard-claim on the
+    question it was reading, so coming back to that question reads it
+    again — three words of a question is not a heard question. A readout
+    that finished naturally keeps its claim, so revisiting a fully-read
+    question stays silent."""
+    idx = rec.get("saying") if isinstance(rec, dict) else None
+    if not isinstance(idx, int) or isinstance(idx, bool):
+        return
+    try:
+        with open(_ask_path(tty)) as f:
+            latest = json.load(f)
+    except (OSError, ValueError):
+        return
+    if not isinstance(latest, dict) or latest.get("ts") != rec.get("ts"):
+        return
+    counts = latest.get("heard") or {}
+    cur = int(counts.get(str(idx)) or 0)
+    if not cur:
+        return
+    counts[str(idx)] = cur - 1
+    latest["heard"] = counts
+    try:
+        with open(_ask_path(tty), "w") as f:
+            json.dump(latest, f)
+    except OSError:
+        pass
 
 
 def _mark_ask_say(tty, ts, pid):
@@ -1037,17 +1106,125 @@ def ask_open(payload):
     spawn_watch()  # owns the focus transitions from here on
 
 
-def ask_announce(tty):
-    """Detached: first paint + read-out for a question that just opened.
+def _ask_preamble(transcript, first_q):
+    """Text of the assistant message holding this ask's tool_use, or None
+    while that message has not reached the transcript yet ("" once it is
+    there but carries no text). Claude Code writes each content block as
+    its OWN transcript entry, so the text and the tool_use never share
+    one — they share a message id, and the text entries land first.
+    Matched on the first question's text, so an older ask in the same
+    transcript can never be mistaken for this one — the newest match wins.
+    """
+    texts = {}  # message id -> its text blocks, in transcript order
+    found = None
+    try:
+        with open(transcript, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("type") != "assistant":
+                    continue
+                message = entry.get("message") or {}
+                msg_id = message.get("id")
+                for b in message.get("content") or []:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "text" and b.get("text"):
+                        texts.setdefault(msg_id, []).append(b["text"])
+                    elif b.get("type") == "tool_use" \
+                            and b.get("name") == "AskUserQuestion" \
+                            and str(((b.get("input") or {}).get("questions")
+                                     or [{}])[0].get("question") or "") \
+                            == first_q:
+                        found = "\n".join(texts.get(msg_id) or [])
+    except OSError:
+        return None
+    return found
 
-    Focused tab = you are already looking at the question: no tint, no
-    speech. Everything after this first moment is the watcher's job.
+
+def _ask_context(rec):
+    """The words Claude wrote right before asking — the WHY of the
+    question, which the question text alone rarely carries. Sanitized and
+    capped exactly like a spoken summary (`/tts length` honored, adaptive
+    otherwise). Waits briefly for the assistant entry to flush: the
+    PreToolUse hook can beat Claude Code's transcript write by a beat.
+    Empty when the ask arrived with no preamble, or `ask_context` is off.
+    """
+    session_id = rec.get("session")
+    if resolve_setting(session_id, "ask_context", ("on", "off"), "on") == "off":
+        return ""
+    transcript = rec.get("transcript") or ""
+    questions = rec.get("questions") or []
+    first_q = str((questions[0] if questions else {}).get("q") or "")
+    if not transcript or not first_q:
+        return ""
+    text = None
+    for _ in range(20):  # up to ~5s for the flush
+        text = _ask_preamble(transcript, first_q)
+        if text is not None:
+            break
+        time.sleep(0.25)
+    if not text:
+        return ""
+    return _trim(sanitize(text), resolve_summary_cap(session_id, text))
+
+
+def ask_announce(tty):
+    """Detached: first paint + read-out for a question that just opened,
+    and the context harvest that later reads lean on.
+
+    Focused tab = you are already looking at the question: no tint, and
+    speech only under `ask_first` — hearing question one the moment it
+    opens is opt-in, because a question that opens under your nose is
+    already on screen. What makes the opt-in legitimate where a summary
+    equivalent would not be: a missed summary has `rr`; a missed question
+    has nothing. Not gated by `hold` (that governs terminals you are NOT
+    watching) nor focus_speak (no click happened) — ask_speak and the mode
+    still apply, via speak_ask_question's caller here.
+
+    Everything after this first moment is the watcher's job.
     """
     rec = live_asks().get(tty)
-    if not rec or focused_tty() == tty:
+    if not rec:
         return
-    ask_paint(tty, rec)
-    speak_ask(rec)
+    focused = focused_tty() == tty
+    if not focused:
+        ask_paint(tty, rec)
+        speak_ask(rec)
+    # Harvest the context AFTER the unfocused announce (the headers must
+    # not wait on a transcript flush) but BEFORE any ask_first read (its
+    # whole point is the why). Stored in the marker so the watcher's
+    # click-in and screen-follow reads get it too.
+    context = _ask_context(rec)
+    if context:
+        try:
+            with open(_ask_path(tty)) as f:
+                latest = json.load(f)
+        except (OSError, ValueError):
+            latest = None
+        if isinstance(latest, dict) and latest.get("ts") == rec.get("ts"):
+            latest["context"] = context
+            try:
+                with open(_ask_path(tty), "w") as f:
+                    json.dump(latest, f)
+            except OSError:
+                pass
+            rec = latest
+    session_id = rec.get("session")
+    if focused \
+            and resolve_setting(session_id, "ask_first",
+                                ("on", "off"), "off") == "on" \
+            and resolve_mode(session_id) != "off" \
+            and resolve_setting(session_id, "ask_speak",
+                                ("on", "off"), "on") == "on" \
+            and not on_call() and active_say_pid() is None \
+            and focused_tty() == tty:
+        speak_ask_question(tty, rec, 0)
 
 
 def ask_paint(tty, rec):
@@ -1097,80 +1274,114 @@ def speak_ask(rec):
     _mark_ask_say(rec.get("tty"), rec.get("ts"), proc.pid)
 
 
-ASK_ORDINALS = ("one", "two", "three", "four")
+def _visible_text(tty, term):
+    """Visible text of the focused tab, or None if the emulator cannot be
+    asked (or the selected tab turns out not to be `tty` — the answer is
+    only trusted when it names the terminal it came from, so a focus
+    switch between the poll's focus check and this call reads as
+    "cannot tell", never as another tab's text)."""
+    if term == "Apple_Terminal":
+        out = _osascript('tell application "Terminal"\nif frontmost then\n'
+                         'return (tty of selected tab of front window) & '
+                         '"\\n" & (contents of selected tab of front window)\n'
+                         'end if\nend tell\nreturn ""')
+    elif term == "iTerm.app":
+        out = _osascript('tell application "iTerm2"\nif frontmost then\n'
+                         'return (tty of current session of current window) & '
+                         '"\\n" & (text of current session of current window)\n'
+                         'end if\nend tell\nreturn ""')
+    else:
+        return None
+    if not out:
+        return None
+    head, _, body = out.partition("\n")
+    return body if head.strip() == tty else None
 
 
-def speak_ask_on_focus(tty, rec):
-    """You clicked into a terminal holding an open question — read it out.
+def _ask_norm(s):
+    """Alphanumerics only, single-spaced. The TUI wraps question text and
+    boxes it in border glyphs, so matching on anything richer would break
+    the needle at every wrapped line."""
+    return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
 
-    The one state that means YOU are the blocker was also the only one you
-    could not hear on demand: speak_ask() fires once, unfocused, and reads
-    headers only, so clicking in just dropped the tint and said nothing.
-    This is the click-to-talk that summaries already have, and it reads the
-    questions in full plus their option LABELS — the labels are the answers
-    you are choosing between; the descriptions are on screen.
 
-    Deliberately NOT gated by `hold`, unlike speak_ask(): that setting
-    governs unprompted speech at a terminal you are not watching, and a
-    click-in is the opposite of unprompted — the same reasoning that leaves
-    speak_on_focus() ungated. It IS gated by focus_speak, which means "no
-    click-to-talk" and covers questions as much as summaries.
-
-    Stops after `ask_reads` reads: past that the question has been in front
-    of you for a while and repeating it is nagging. The purple tab still
-    returns on every switch away, because that reflects the question being
-    open, not unheard.
-    """
-    session_id = rec.get("session")
-    if resolve_mode(session_id) == "off":
-        return
-    if resolve_setting(session_id, "ask_speak", ("on", "off"), "on") == "off":
-        return
-    if resolve_setting(session_id, "focus_speak", ("on", "off"), "on") == "off":
-        return
-    if on_call() or active_say_pid() is not None:
-        return
-    questions = [q for q in (rec.get("questions") or []) if isinstance(q, dict)]
-    if not questions:
-        return  # an older marker, written before questions were stored
-    reads = rec.get("reads")
-    if not isinstance(reads, int) or isinstance(reads, bool) or reads < 0:
-        reads = 0
-    if reads >= resolve_ask_reads(session_id):
-        return
-    parts = []
-    for i, q in enumerate(questions):
-        text = str(q.get("q") or "").strip()
-        if not text:
+def displayed_question(tty, rec):
+    """Index of the sub-question currently rendered in the tab, or None
+    when the screen cannot say. Highest matching index wins: the TUI only
+    renders a question once you reach it, so when an already-answered
+    question's text is still visible above, the newest match is the one
+    you are on."""
+    text = _visible_text(tty, rec.get("term") or "")
+    if not text:
+        return None
+    hay = _ask_norm(text)
+    found = None
+    for i, q in enumerate(rec.get("questions") or []):
+        if not isinstance(q, dict):
             continue
-        if len(questions) > 1 and i < len(ASK_ORDINALS):
-            text = f"Question {ASK_ORDINALS[i]}: {text}"
-        if text[-1] not in ".?!":
-            text += "."
-        options = [str(o).strip() for o in (q.get("options") or []) if str(o).strip()]
-        if options:
-            text += " Options: " + "; ".join(options) + "."
-        parts.append(text)
-    if not parts:
+        needle = _ask_norm(str(q.get("q") or ""))[:ASK_NEEDLE_CHARS]
+        if len(needle) >= ASK_NEEDLE_MIN and needle in hay:
+            found = i
+    return found
+
+
+def speak_ask_question(tty, rec, idx):
+    """Speak sub-question `idx` — text plus option LABELS (the labels are
+    the answers you are choosing between; the descriptions are on screen)
+    — and log it as heard in the marker. The name intro and the "plus two
+    more" count ride only the set's first read; later questions lead with
+    their number, so advancing sounds like advancing, not like a new
+    session piping up.
+
+    The heard-claim is written before the speech starts. The watcher is
+    the only writer of this field, so no locking — but re-read anyway and
+    leave it alone if the marker has been replaced, so a question that
+    opened in the last instant does not start life part-heard.
+    """
+    questions = rec.get("questions") or []
+    if not (0 <= idx < len(questions)) or not isinstance(questions[idx], dict):
         return
-    spoken = f"{rec.get('name') or 'Claude'} is asking. " + " ".join(parts)
-    # Claim the read before speaking. The watcher is the only writer of
-    # this field, so no locking — but re-read anyway and leave it alone if
-    # the marker has been replaced, so a question that opened in the last
-    # instant does not start life having spent one of its reads.
+    text = str(questions[idx].get("q") or "").strip()
+    if not text:
+        return
+    if text[-1] not in ".?!":
+        text += "."
+    options = [str(o).strip() for o in (questions[idx].get("options") or [])
+               if str(o).strip()]
+    if options:
+        text += " Options: " + "; ".join(options) + "."
+    heard = rec.get("heard") or {}
+    if any(heard.values()):
+        lead = f"Question {idx + 1}. "
+    else:
+        lead = f"{rec.get('name') or 'Claude'} is asking. "
+        # The why before the what: the words Claude wrote just before
+        # asking, harvested by ask_announce (empty under ask_context off,
+        # or when the ask came with no preamble).
+        context = str(rec.get("context") or "").strip()
+        if context:
+            if context[-1] not in ".?!":
+                context += "."
+            lead += context + " The question: "
+        more = len(questions) - idx - 1
+        if more:
+            text += f" Plus {more} more question{'s' if more > 1 else ''}."
     try:
         with open(_ask_path(tty)) as f:
             latest = json.load(f)
     except (OSError, ValueError):
         latest = None
     if isinstance(latest, dict) and latest.get("ts") == rec.get("ts"):
-        latest["reads"] = reads + 1
+        counts = latest.get("heard") or {}
+        counts[str(idx)] = int(counts.get(str(idx)) or 0) + 1
+        latest["heard"] = counts
+        latest["saying"] = idx
         try:
             with open(_ask_path(tty), "w") as f:
                 json.dump(latest, f)
         except OSError:
             pass
-    proc = subprocess.Popen(["/usr/bin/say", spoken],
+    proc = subprocess.Popen(["/usr/bin/say", lead + text],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
     try:
@@ -1179,6 +1390,112 @@ def speak_ask_on_focus(tty, rec):
     except OSError:
         pass
     _mark_ask_say(tty, rec.get("ts"), proc.pid)
+
+
+def _ask_gates_open(session_id):
+    """The speech gates shared by every focused question read: TTS on,
+    ask_speak on, focus_speak on ("no click-to-talk" covers questions as
+    much as summaries). Deliberately does NOT include `hold`, unlike
+    speak_ask(): that setting governs unprompted speech at a terminal you
+    are not watching, and a read at the focused tab is the opposite of
+    unprompted — the same reasoning that leaves speak_on_focus() ungated.
+    """
+    if resolve_mode(session_id) == "off":
+        return False
+    if resolve_setting(session_id, "ask_speak", ("on", "off"), "on") == "off":
+        return False
+    return resolve_setting(session_id, "focus_speak",
+                           ("on", "off"), "on") == "on"
+
+
+def _heard_count(rec, idx):
+    return int((rec.get("heard") or {}).get(str(idx)) or 0)
+
+
+def ask_screen_follow(tty, rec, owed):
+    """ask_follow `screen`, and you are sitting on a tab with an open
+    question: keep the voice on the sub-question actually displayed.
+
+    Each question is read the FIRST time it appears on screen — advancing
+    to it (Enter, arrow keys, a click, however) is you asking for the next
+    one. The set's first question is the exception: it only reads on a
+    click-IN (`owed`), because a question that opens under your nose is
+    already in front of you — the rule that keeps every other unprompted
+    readout away from the focused tab. Moving on mid-readout cuts the
+    voice: the screen no longer showing a question is the end of anyone's
+    interest in hearing it.
+
+    Returns True when the screen answered "which question is up" — the
+    click-cursor fallback must then stay quiet even if nothing was spoken
+    — and False when it could not tell (unscrapable emulator, scrape
+    miss), which hands the click-in to speak_ask_on_focus().
+    """
+    if not _ask_gates_open(rec.get("session")):
+        return False
+    idx = displayed_question(tty, rec)
+    if idx is None:
+        return False
+    # A set is "engaged" once any question read has happened — from then
+    # on, returning to an unheard question (a cut-off question one
+    # included) reads it without needing a fresh click-in. Before any
+    # read, question one still waits for the click: a set that opens
+    # under your nose is already on screen.
+    engaged = isinstance(rec.get("saying"), int)
+    if rec.get("saying") != idx and _silence_ask(rec):
+        # You moved past a question mid-readout: cut the voice, and take
+        # the heard-claim back so arrowing back to it reads it again.
+        _unhear_cut(tty, rec)
+    if _heard_count(rec, idx) == 0 and (idx > 0 or owed or engaged):
+        if active_say_pid() is not None:
+            # The voice is mid-something else; a later poll retries. An
+            # owed first read survives by returning False — the watcher
+            # keeps the owed flag, and the cursor fallback is voice-gated
+            # so it stays quiet too. A later question needs no owed flag.
+            return not owed
+        speak_ask_question(tty, rec, idx)
+    return True
+
+
+def speak_ask_on_focus(tty, rec):
+    """You clicked into a terminal holding an open question and the screen
+    could not say which sub-question you are on (ask_follow `click`, an
+    emulator without AppleScript text access, a scrape miss): read from
+    the cursor instead.
+
+    The one state that means YOU are the blocker was also the only one you
+    could not hear on demand: speak_ask() fires once, unfocused, and reads
+    headers only, so clicking in just dropped the tint and said nothing.
+    This is the click-to-talk that summaries already have. Each click-in
+    reads the next UNHEARD question — click in, hear one, switch away (the
+    readout stops), click back, hear the next — because the UI shows one
+    question at a time and without the screen a hook cannot see you
+    advance; reading them all at once just talks over questions you are
+    not on yet. Once every question is heard, further click-ins re-cycle
+    only while `ask_reads` (default 1) allows: past that the questions
+    have been in front of you for a while and repeating them is nagging.
+    The purple tab still returns on every switch away, because that
+    reflects the question being open, not unheard. Under ask_follow `off`
+    it is the first question only, `ask_reads` times, no advancement.
+    """
+    session_id = rec.get("session")
+    if not _ask_gates_open(session_id):
+        return
+    if on_call() or active_say_pid() is not None:
+        return
+    questions = rec.get("questions") or []
+    if not questions:
+        return  # an older marker, written before questions were stored
+    cap = resolve_ask_reads(session_id)
+    if resolve_ask_follow(session_id) == "off":
+        idx = 0 if _heard_count(rec, 0) < cap else None
+    else:
+        idx = next((i for i in range(len(questions))
+                    if _heard_count(rec, i) == 0), None)
+        if idx is None:
+            idx = next((i for i in range(len(questions))
+                        if _heard_count(rec, i) < cap), None)
+    if idx is not None:
+        speak_ask_question(tty, rec, idx)
 
 
 def ask_clear(tty):
@@ -1454,6 +1771,15 @@ def watch():
             # runs every poll — put it there and the question re-reads
             # itself every 1.5 seconds for as long as it stays open.
             ask_owed = focus if focus in asking else None
+            # Leaving a question mid-readout is the stop gesture: you have
+            # walked away, so it stops talking — and the cut question is
+            # un-heard, so coming back reads it again. Keyed to the tab you
+            # LEFT, never the unfocused first-open announce — that one
+            # plays at a background tab by design and must survive focus
+            # churn.
+            left = asking.get(last_focus)
+            if left and _silence_ask(left):
+                _unhear_cut(last_focus, left)
             last_focus = focus
         if owed and owed in waiting and active_say_pid() is None and not on_call():
             ready = [e for e in waiting[owed]
@@ -1462,6 +1788,17 @@ def watch():
             if ready:
                 speak_on_focus(owed, ready)
             owed = None  # paid up: it stays quiet until you come back again
+        # ask_follow `screen`: while you sit on a tab with an open
+        # question, follow the sub-question on screen — one scrape per
+        # poll, ONLY in this state, so nothing reads the screen at any
+        # other time. When the screen answers, it owns the read and the
+        # click-cursor below stays quiet; when it cannot tell, a click-in
+        # falls through to the cursor.
+        cur = asking.get(focus)
+        if cur and not on_call() \
+                and resolve_ask_follow(cur.get("session")) == "screen" \
+                and ask_screen_follow(focus, cur, ask_owed == focus):
+            ask_owed = None
         if ask_owed and ask_owed in asking and active_say_pid() is None \
                 and not on_call():
             speak_ask_on_focus(ask_owed, asking[ask_owed])
