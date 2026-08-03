@@ -84,9 +84,12 @@ of waiting):
   tab still comes back every time you switch away: that tracks the question
   being *open*, not unheard. Answering the question stops a readout
   mid-sentence; so does switching away from the tab, or moving past the
-  question on screen — leaving it is the stop button. A question cut off
-  mid-sentence is un-heard: come back to it and it reads again (a fully-read
-  one stays quiet).
+  question on screen — leaving it is the stop button. Moving *past* a
+  question also un-hears it, so arrowing back re-reads it. Switching away
+  from the tab does not: leaving overwhelmingly means you went to fetch
+  what you need in order to answer — a link, a file, a name — and re-reading
+  the question when you paste it back is the tool talking over the work it
+  just asked you to do. You heard it; that is why you left.
 - **The first read opens with the why** (`ask_context`, default `on`): before
   question one, the voice speaks the words Claude wrote right before asking —
   sanitized and capped exactly like a spoken summary (`/tts length` honored,

@@ -79,8 +79,9 @@ moment the screen moves on; `click` skips the scraping and each click-in
 reads the next unheard question instead; `off` is first-question-only.
 `screen` behaves like `click` wherever the screen cannot be read.
 `ask_reads` (default 1) caps how often an already-heard set re-reads; a
-readout cut mid-sentence (skipped past, switched away from) is un-heard
-and reads again on return. The set's first read opens with the words
+question SKIPPED PAST mid-readout is un-heard and reads again on return,
+but one you merely switched away from is not — leaving the tab is how you
+go fetch the answer, and re-reading on your way back talks over it. The set's first read opens with the words
 Claude wrote right before asking — the why, capped like a summary
 (`ask_context`, default on) — and `ask_first` (default off) reads
 question one the moment a set opens in the focused tab, no click needed.
@@ -1945,14 +1946,22 @@ def watch():
             # itself every 1.5 seconds for as long as it stays open.
             ask_owed = focus if focus in asking else None
             # Leaving a question mid-readout is the stop gesture: you have
-            # walked away, so it stops talking — and the cut question is
-            # un-heard, so coming back reads it again. Keyed to the tab you
-            # LEFT, never the unfocused first-open announce — that one
-            # plays at a background tab by design and must survive focus
-            # churn.
+            # walked away, so it stops talking. Keyed to the tab you LEFT,
+            # never the unfocused first-open announce — that one plays at
+            # a background tab by design and must survive focus churn.
+            #
+            # It does NOT un-hear the question, though the readout was cut
+            # just as surely as the screen-follow case does un-hear. The
+            # difference is what the gesture MEANS. Arrowing past a
+            # question says you are done with it and on to the next.
+            # Leaving the tab, overwhelmingly, means you went to fetch
+            # what you need in order to ANSWER — a link, a file, a name —
+            # and re-reading the whole question when you paste it back is
+            # the tool talking over the work it just asked you to do. You
+            # heard it; that is why you left.
             left = asking.get(last_focus)
-            if left and _silence_ask(left):
-                _unhear_cut(last_focus, left)
+            if left:
+                _silence_ask(left)
             last_focus = focus
         if owed and owed in waiting and active_say_pid() is None and not on_call():
             ready = [e for e in waiting[owed]
