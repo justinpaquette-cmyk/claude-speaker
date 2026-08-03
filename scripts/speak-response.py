@@ -78,10 +78,10 @@ one as you advance (Enter, arrows, click alike) and cutting over the
 moment the screen moves on; `click` skips the scraping and each click-in
 reads the next unheard question instead; `off` is first-question-only.
 `screen` behaves like `click` wherever the screen cannot be read.
-`ask_reads` (default 1) caps how often an already-heard set re-reads; a
-question SKIPPED PAST mid-readout is un-heard and reads again on return,
-but one you merely switched away from is not — leaving the tab is how you
-go fetch the answer, and re-reading on your way back talks over it. The set's first read opens with the words
+`ask_reads` (default 1) caps how often an already-heard set re-reads, and
+only a read that FINISHED counts against it: any readout cut mid-sentence
+— skipped past, or switched away from — is un-heard and reads again on
+return, because three words of a question is not a heard question. The set's first read opens with the words
 Claude wrote right before asking — the why, capped like a summary
 (`ask_context`, default on) — and `ask_first` (default off) reads
 question one the moment a set opens in the focused tab, no click needed.
@@ -168,9 +168,11 @@ ASK_MAX_AGE_SECS = 86400  # forget an ask marker nothing ever closed
 ASK_STALE_GRACE_SECS = 10
 # Times clicking into a terminal re-reads the question it is holding.
 # Once: the click that focused the tab put the question on screen, and
-# repeating it is nagging — `/tts ask_reads N` for more. The purple tab
-# still comes back on every switch away, because that tracks the question
-# being OPEN, not unheard.
+# repeating it is nagging — `/tts ask_reads N` for more. Only a read that
+# FINISHED spends one; a readout cut mid-sentence is un-heard, so a cap of
+# 1 cannot be burned by three words. The purple tab still comes back on
+# every switch away, because that tracks the question being OPEN, not
+# unheard.
 ASK_READS_DEFAULT = 1
 # How the voice advances through a multi-question ask. `screen`: while you
 # sit on the asking tab, the watcher reads the tab's visible text (one
@@ -1950,18 +1952,16 @@ def watch():
             # never the unfocused first-open announce — that one plays at
             # a background tab by design and must survive focus churn.
             #
-            # It does NOT un-hear the question, though the readout was cut
-            # just as surely as the screen-follow case does un-hear. The
-            # difference is what the gesture MEANS. Arrowing past a
-            # question says you are done with it and on to the next.
-            # Leaving the tab, overwhelmingly, means you went to fetch
-            # what you need in order to ANSWER — a link, a file, a name —
-            # and re-reading the whole question when you paste it back is
-            # the tool talking over the work it just asked you to do. You
-            # heard it; that is why you left.
+            # It also un-hears, exactly as the screen-follow cut does: the
+            # claim is written before the voice starts, so a cut readout
+            # leaves a question marked heard that you got three words of,
+            # and at `ask_reads` 1 that is the ONLY read it will ever get —
+            # click back in and the tab is silent forever. Walking away
+            # late enough to have heard the whole thing costs a re-read on
+            # return; walking away early used to cost the question.
             left = asking.get(last_focus)
-            if left:
-                _silence_ask(left)
+            if left and _silence_ask(left):
+                _unhear_cut(last_focus, left)
             last_focus = focus
         if owed and owed in waiting and active_say_pid() is None and not on_call():
             ready = [e for e in waiting[owed]
