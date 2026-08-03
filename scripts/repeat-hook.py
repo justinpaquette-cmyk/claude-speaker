@@ -153,7 +153,7 @@ def replay_turn(payload, kind):
     title = module.session_name(session_id)
     name = (module.humanize(title) if title
             else module.speak_name(os.path.basename(payload.get("cwd") or "")))
-    proc = subprocess.Popen(["/usr/bin/say", f"{name}: {spoken}"],
+    proc = subprocess.Popen(module.say_argv(session_id, f"{name}: {spoken}"),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
     try:

@@ -280,6 +280,82 @@ def resolve_ask_follow(session_id):
                            ASK_FOLLOW_DEFAULT)
 
 
+def resolve_voice(session_id):
+    """`say -v` name, or None to leave it unset (macOS's own system voice).
+
+    `voice` per-session > global > unset — same "stop at the first level
+    that HAS a value, even if that value is the disabling sentinel" shape
+    as resolve_tab_color()'s "off". An earlier version returned on any
+    non-"default" string, which meant a session explicitly set back to
+    "default" silently fell through to a global custom voice instead of
+    clearing it — the one case the setting exists for.
+
+    Non-string values are ignored rather than coerced: set_setting() only
+    ever writes a string here, so a number in the file means the file was
+    hand-edited, and `say -v 42` would speak nothing, silently, exactly
+    the failure the set-time validation exists to prevent.
+    """
+    paths = []
+    if session_id:
+        paths.append(os.path.join(SESSION_DIR, f"{session_id}.json"))
+    paths.append(STATE_FILE)
+    raw = None
+    for path in paths:
+        try:
+            with open(path) as f:
+                val = json.load(f).get("voice")
+        except (OSError, ValueError):
+            continue
+        val = val.strip() if isinstance(val, str) else ""
+        if val:
+            raw = val
+            break
+    if not raw or raw.lower() == "default":
+        return None
+    return raw
+
+
+def resolve_rate(session_id):
+    """Words per minute for `say -r`, or None to leave it at the system rate.
+
+    Not explicit_int(): that helper falls through past anything that isn't
+    a positive number, including an explicit "default", so a session set
+    back to "default" would silently inherit a global rate instead of
+    clearing it — same bug class as resolve_voice() above, same fix shape.
+    """
+    paths = []
+    if session_id:
+        paths.append(os.path.join(SESSION_DIR, f"{session_id}.json"))
+    paths.append(STATE_FILE)
+    for path in paths:
+        try:
+            with open(path) as f:
+                val = json.load(f).get("rate")
+        except (OSError, ValueError):
+            continue
+        if val is None:
+            continue
+        if isinstance(val, str) and val.strip().lower() == "default":
+            return None
+        if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
+            return int(val)
+    return None
+
+
+def say_argv(session_id, text):
+    """Full `say` argv for one utterance: voice/rate flags before the text,
+    exactly as every call site used to hardcode `["/usr/bin/say", text]`."""
+    argv = ["/usr/bin/say"]
+    voice = resolve_voice(session_id)
+    if voice:
+        argv += ["-v", voice]
+    rate = resolve_rate(session_id)
+    if rate:
+        argv += ["-r", str(rate)]
+    argv.append(text)
+    return argv
+
+
 def last_assistant_text(transcript_path):
     """(newest assistant text, count of assistant text messages seen)."""
     text = None
@@ -742,14 +818,16 @@ SETTABLE = {"mode": MODES, "collision": COLLISIONS, "chime": ("on", "off"),
             "ask_speak": ("on", "off"), "summary_chars": "int",
             "recap_max": "int", "ask_reads": "int",
             "ask_follow": ASK_FOLLOWS, "ask_first": ("on", "off"),
-            "ask_context": ("on", "off")}
+            "ask_context": ("on", "off"),
+            "voice": "voice", "rate": "rate"}
 DEFAULTS = {"mode": "summary", "collision": "chime", "chime": "on",
             "focus_speak": "on", "menubar": "on", "notify": "on",
             "raise": "off", "tab_color": DEFAULT_TAB_COLOR,
             "ask_color": ASK_TAB_COLOR, "ask_speak": "on",
             "summary_chars": "adaptive", "recap_max": RECAP_MAX_DEFAULT,
             "ask_reads": ASK_READS_DEFAULT, "ask_follow": ASK_FOLLOW_DEFAULT,
-            "ask_first": "off", "ask_context": "on"}
+            "ask_first": "off", "ask_context": "on",
+            "voice": "default", "rate": "default"}
 
 
 def _settings_path(session_id):
@@ -757,6 +835,29 @@ def _settings_path(session_id):
         return STATE_FILE
     os.makedirs(SESSION_DIR, exist_ok=True)
     return os.path.join(SESSION_DIR, f"{session_id}.json")
+
+
+def installed_voices():
+    """Every voice name `say -v` knows about, macOS's own multi-language list.
+
+    `say -v NotARealName` exits 0 and speaks nothing — no error, no fallback
+    — so a typo'd voice would go silently unheard forever rather than fail
+    once at set time. Parsed on the locale token (`xx_XX` / `xx_001`, always
+    present, never containing whitespace) rather than column width: several
+    names ("Eddy (English (US))") are wider than the padding, so a fixed
+    number of spaces before the locale field is not reliable.
+    """
+    try:
+        out = subprocess.run(["/usr/bin/say", "-v", "?"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    names = set()
+    for line in out.splitlines():
+        m = re.match(r"^(.*)\s([a-z]{2}_[A-Za-z0-9]+)\s+#", line)
+        if m:
+            names.add(m.group(1).strip())
+    return names
 
 
 def set_setting(key, value, session_id=None):
@@ -777,6 +878,20 @@ def set_setting(key, value, session_id=None):
                 and not re.fullmatch(r"#[0-9a-f]{6}", value):
             return (f"{key} wants off, a #rrggbb hex, or one of: "
                     + ", ".join(TAB_COLORS))
+    elif allowed == "voice":
+        value = str(value).strip()
+        if value.lower() != "default" and value not in installed_voices():
+            return (f"{key}: {value!r} is not an installed voice — "
+                     "`say -v ?` lists them, or `default` to clear this")
+    elif allowed == "rate":
+        value = str(value).strip()
+        if value.lower() != "default":
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                return f"{key} wants a positive integer or 'default', got {value!r}"
+            if value <= 0:
+                return f"{key} wants a positive integer or 'default', got {value!r}"
     elif value not in allowed:
         return f"{key} wants one of: {', '.join(allowed)} (got {value!r})"
     path = _settings_path(session_id)
@@ -1263,7 +1378,7 @@ def speak_ask(rec):
     what = ", ".join(humanize(h) for h in headers[:4])
     text = f"{rec.get('name') or 'Claude'}: waiting on your call"
     text += f". {what}." if what else "."
-    proc = subprocess.Popen(["/usr/bin/say", text],
+    proc = subprocess.Popen(say_argv(session_id, text),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
     try:
@@ -1381,7 +1496,7 @@ def speak_ask_question(tty, rec, idx):
                 json.dump(latest, f)
         except OSError:
             pass
-    proc = subprocess.Popen(["/usr/bin/say", lead + text],
+    proc = subprocess.Popen(say_argv(rec.get("session"), lead + text),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
     try:
@@ -1820,7 +1935,8 @@ def speak_on_focus(tty, queued):
     """
     # Resolved against the NEWEST entry — that is the session you clicked
     # into, and the one whose per-session setting should decide.
-    n = resolve_recap_max(queued[-1].get("session"))
+    newest_session = queued[-1].get("session")
+    n = resolve_recap_max(newest_session)
     window = queued[-n:]
     text = " ... Next. ".join(
         f"{e.get('name') or speak_name(e.get('project') or '')}: {e.get('text')}"
@@ -1838,7 +1954,7 @@ def speak_on_focus(tty, queued):
         return
     tint_stop(tty)
     badge("🔊 " + (window[0].get("name") or ""), window[0].get("session"))
-    proc = subprocess.Popen(["/usr/bin/say", text],
+    proc = subprocess.Popen(say_argv(newest_session, text),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
     try:
@@ -2032,7 +2148,7 @@ def drain():
         prefix = entry.get("name") or speak_name(entry.get("project") or "")
         badge("🔊 " + prefix, entry.get("session"))
         proc = subprocess.Popen(
-            ["/usr/bin/say", f"{prefix}: {entry.get('text')}"],
+            say_argv(entry.get("session"), f"{prefix}: {entry.get('text')}"),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True)
         try:
@@ -2154,7 +2270,7 @@ def main():
     # Name-prefixed on every path — immediate, drainer, /spoken-recap — so a
     # summary is always attributable to a terminal, contention or not.
     badge("🔊 " + entry["name"], session_id)
-    proc = subprocess.Popen(["/usr/bin/say", f"{entry['name']}: {spoken}"],
+    proc = subprocess.Popen(say_argv(session_id, f"{entry['name']}: {spoken}"),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
     try:

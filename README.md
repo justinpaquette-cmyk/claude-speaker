@@ -123,6 +123,8 @@ Detection uses a tiny compiled helper (`scripts/av-status.c`) reading the same C
 | `/tts ask_first <on\|off>` | Read question one the moment a set opens in the focused tab (default off) |
 | `/tts ask_context <on\|off>` | Open the first read with the words Claude wrote before asking — the why (default on) |
 | `/tts raise <window\|off>` | Opt-in window raise (see caveat below) |
+| `/tts voice <name\|default>` | Which `say` voice speaks — `say -v ?` lists what's installed |
+| `/tts rate <n\|default>` | Words per minute for `say -r` (default: the system rate — plain `say` does not inherit the Accessibility rate slider) |
 | `/tts name <spoken name>` | What the voice calls this project's terminals |
 | `/spoken-recap [status\|all]` | Replay a queue, list it, or replay every session's |
 

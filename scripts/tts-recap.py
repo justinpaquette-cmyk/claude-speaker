@@ -126,8 +126,65 @@ def speak_name(project):
     return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
 
 
-def speak(text):
-    proc = subprocess.Popen(["/usr/bin/say", text],
+def resolve_voice(session):
+    """Duplicate of speak-response.py's resolve_voice() — see resolve_recap_max
+    for why this file carries its own copy instead of importing.
+
+    Stops at the first level that HAS a value, even "default" — a session
+    explicitly set back to "default" must clear a global custom voice, not
+    fall through to it.
+    """
+    paths = []
+    if session:
+        paths.append(os.path.join(SESSION_DIR, f"{session}.json"))
+    paths.append(os.path.join(CLAUDE_DIR, "tts-state.json"))
+    raw = None
+    for path in paths:
+        try:
+            with open(path) as f:
+                val = (json.load(f).get("voice") or "").strip()
+        except (OSError, ValueError):
+            continue
+        if val:
+            raw = val
+            break
+    if not raw or raw.lower() == "default":
+        return None
+    return raw
+
+
+def resolve_rate(session):
+    """Duplicate of speak-response.py's resolve_rate() — same "default at
+    the first level that has it wins" shape as resolve_voice() above."""
+    paths = []
+    if session:
+        paths.append(os.path.join(SESSION_DIR, f"{session}.json"))
+    paths.append(os.path.join(CLAUDE_DIR, "tts-state.json"))
+    for path in paths:
+        try:
+            with open(path) as f:
+                val = json.load(f).get("rate")
+        except (OSError, ValueError):
+            continue
+        if val is None:
+            continue
+        if isinstance(val, str) and val.strip().lower() == "default":
+            return None
+        if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
+            return int(val)
+    return None
+
+
+def speak(text, session=None):
+    argv = ["/usr/bin/say"]
+    voice = resolve_voice(session)
+    if voice:
+        argv += ["-v", voice]
+    rate = resolve_rate(session)
+    if rate:
+        argv += ["-r", str(rate)]
+    argv.append(text)
+    proc = subprocess.Popen(argv,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
     try:
@@ -161,7 +218,7 @@ def main():
             return
         speak(" ... Next. ".join(
             f"{e.get('name') or speak_name(e.get('project'))}: {e.get('text')}"
-            for e in window))
+            for e in window), session=window[-1].get("session"))
         for e in window:
             e["spoken"] = True
         save_queue(entries)
@@ -175,7 +232,8 @@ def main():
             print("queue empty")
             return
         e = mine[-1]
-        speak(f"{e.get('name') or speak_name(e.get('project'))}: {e.get('text')}")
+        speak(f"{e.get('name') or speak_name(e.get('project'))}: {e.get('text')}",
+              session=e.get("session"))
         e["spoken"] = True
         save_queue(entries)
         print(f"replaying latest: [{e.get('project')}] {e.get('text')}")
@@ -197,7 +255,7 @@ def main():
     text = " ... Next. ".join(chunks)
     if skipped:
         text = f"{skipped} older update{'' if skipped == 1 else 's'} skipped. " + text
-    speak(text)
+    speak(text, session=window[-1].get("session"))
     for e in unplayed:
         e["spoken"] = True
     save_queue(entries)

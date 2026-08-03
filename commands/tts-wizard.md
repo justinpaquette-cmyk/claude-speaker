@@ -41,6 +41,8 @@ ls -t ~/.claude/projects/<encoded-cwd>/*.jsonl | head -1   # cwd, / and spaces �
    | **Mode** (`mode`) | `summary` speaks the 🔊 line · `full` speaks the whole response · `off` silent |
    | **Length** (`summary_chars`) | Adaptive by default (scales with how big the turn was); a number sets a flat cap |
    | **Raise** (`raise`) | Off by default — macOS can't raise a window without making it key inside its app, so it can take your keyboard |
+   | **Voice** (`voice`) | Which `say -v` voice speaks. `default` = macOS's own system voice. Validated against the installed list at set time — a typo'd name would otherwise speak nothing, silently, forever |
+   | **Rate** (`rate`) | Words per minute for `say -r`. `default` = system rate (~175–200 wpm). Note: plain `say` does NOT inherit the Accessibility/Spoken Content rate slider — this setting is the only way to actually change claude-speaker's speed |
 
    Also mention the two free tricks, since they cost nothing and people forget:
    **`rr`** replays the last summary with no model turn and no tokens — and
