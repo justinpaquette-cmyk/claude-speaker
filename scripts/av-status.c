@@ -11,8 +11,10 @@
  */
 #include <CoreAudio/CoreAudio.h>
 #include <CoreMediaIO/CMIOHardware.h>
+#include <CoreFoundation/CoreFoundation.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* Process-level input state (macOS 14+). Define the four-char selectors
  * ourselves so this also compiles against older SDK headers. */
@@ -22,9 +24,52 @@
 #ifndef kAudioProcessPropertyIsRunningInput
 #define kAudioProcessPropertyIsRunningInput 'piri'
 #endif
+#ifndef kAudioProcessPropertyBundleID
+#define kAudioProcessPropertyBundleID 'pbid'
+#endif
 
-/* Mic, preferred check: does ANY process currently have input running?
- * Exact orange-dot semantics. Returns -1 if the API is unavailable. */
+/* Bundle-ID prefixes that hold the mic open purely to listen for TEXT INPUT
+ * (Dictation, Voice Control, Siri's on-device recognizer) rather than for a
+ * call. The first two were confirmed empirically (2026-08-02: with Voice
+ * Control on and no call running, the only two processes with input
+ * running were com.apple.SpeechRecognitionCore.speechrecognitiond and
+ * com.apple.inputmethod.ironwood — no conferencing app anywhere). The rest
+ * are the same Apple dictation/assistant namespace by inspection, not
+ * separately observed live, included on the same reasoning rather than
+ * waiting to hit each one. Without this exclusion, Voice Control's own
+ * listening makes on_call() permanently true and claude-speaker never
+ * speaks again. A real Zoom/Teams/FaceTime/browser call still shows its
+ * own distinct bundle ID and is unaffected. */
+static const char *DICTATION_INFRA[] = {
+    "com.apple.SpeechRecognitionCore",
+    "com.apple.inputmethod",
+    "com.apple.corespeechd",
+    "com.apple.assistant",
+    "com.apple.Siri",
+    NULL};
+
+static int is_dictation_infra(AudioObjectID proc_obj) {
+    AudioObjectPropertyAddress bp = {
+        kAudioProcessPropertyBundleID,
+        kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    CFStringRef bundle_id = NULL;
+    UInt32 bsize = sizeof(bundle_id);
+    if (AudioObjectGetPropertyData(proc_obj, &bp, 0, NULL, &bsize,
+                                   &bundle_id) != noErr || !bundle_id)
+        return 0;
+    char buf[256] = "";
+    CFStringGetCString(bundle_id, buf, sizeof(buf), kCFStringEncodingUTF8);
+    CFRelease(bundle_id);
+    for (int i = 0; DICTATION_INFRA[i]; i++)
+        if (strncmp(buf, DICTATION_INFRA[i], strlen(DICTATION_INFRA[i])) == 0)
+            return 1;
+    return 0;
+}
+
+/* Mic, preferred check: does ANY process currently have input running,
+ * OTHER than known dictation/speech-recognition infrastructure?
+ * Exact orange-dot semantics, minus that one carve-out. Returns -1 if the
+ * API is unavailable. */
 static int mic_running_by_process(void) {
     AudioObjectPropertyAddress addr = {
         kAudioHardwarePropertyProcessObjectList,
@@ -48,7 +93,7 @@ static int mic_running_by_process(void) {
             kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
         UInt32 val = 0, vsize = sizeof(val);
         if (AudioObjectGetPropertyData(procs[i], &p, 0, NULL, &vsize, &val) ==
-                noErr && val)
+                noErr && val && !is_dictation_infra(procs[i]))
             running = 1;
     }
     free(procs);
