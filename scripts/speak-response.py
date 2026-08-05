@@ -159,6 +159,21 @@ WAIT_STAGES = ((0, "green"), (30, "yellow"), (300, "red"))
 # were skipped. Skipped entries are still marked played (the tab clears);
 # `repeat 10` / `repeat 30m` is the way back to them.
 RECAP_MAX_DEFAULT = 3
+# A `say` holding the voice this long has stopped speaking and started
+# hanging — see active_say_pid(), where one wedged process mutes every
+# session at once. Five minutes is the floor and not a limit: it is many
+# times the longest ordinary summary, and _say_deadline() stretches it
+# further for a genuinely long or slow utterance. Erring long costs a
+# few minutes of quiet once; erring short truncates real speech every
+# time it fires.
+SAY_WEDGE_FLOOR_SECS = 300
+SAY_WPM_DEFAULT = 175  # `say` with no -r
+SAY_CHARS_PER_WORD = 5.5
+# How often the call guard checks whether a call has started under a live
+# readout. A second of voice bleeding into a meeting is the cost of a miss
+# and it is small; polling faster would run the av helper harder for no
+# gain, and only ever while something is actually speaking.
+CALLGUARD_POLL_SECS = 1.0
 # An open AskUserQuestion: the session is blocked on Justin, not the other
 # way round. Deliberately off the green→yellow→red ladder so it reads as a
 # different KIND of state, not a further stage of waiting. Static (a
@@ -553,20 +568,98 @@ def on_call():
     return "mic=1" in out or "cam=1" in out
 
 
+def _etime_secs(etime):
+    """Seconds from ps(1) elapsed time — `[[dd-]hh:]mm:ss`. None if it
+    does not parse, which reads downstream as "no idea how old", never as
+    "old enough to kill"."""
+    days, _, rest = etime.strip().rpartition("-")
+    parts = rest.split(":")
+    if not 2 <= len(parts) <= 3:
+        return None
+    secs = 0
+    try:
+        for p in parts:
+            secs = secs * 60 + int(p)
+        if days:
+            secs += int(days) * 86400
+    except ValueError:
+        return None
+    return secs
+
+
+def _say_deadline(command):
+    """Age past which a `say` is certainly wedged rather than slow, read
+    off its own argv.
+
+    SAY_WEDGE_FLOOR_SECS covers any ordinary summary several times over,
+    but a backlog readout concatenates `recap_max` of them into ONE
+    utterance and `-r` can set the voice arbitrarily slow, so a flat cap
+    could in principle cut a legitimate readout mid-word. The text and
+    the rate are both right there in the command line: size the deadline
+    from them and take whichever is larger. Doubling the estimate keeps
+    this firmly a "this process has stopped making progress" test rather
+    than a speech-length limit — the recovery must never be the thing
+    that truncates you.
+    """
+    argv = command.split()
+    rate = SAY_WPM_DEFAULT
+    if "-r" in argv:
+        try:
+            rate = max(1, int(argv[argv.index("-r") + 1]))
+        except (ValueError, IndexError):
+            pass
+    # Whole command line, not just the text: the flags add a few
+    # characters of slack, and slack only ever makes this more generous.
+    est = len(command) / (rate * SAY_CHARS_PER_WORD / 60.0)
+    return max(SAY_WEDGE_FLOOR_SECS, est * 2)
+
+
 def active_say_pid():
-    """Pid of the currently speaking `say`, or None if the voice is idle."""
+    """Pid of the currently speaking `say`, or None if the voice is idle.
+
+    This is the one-voice-at-a-time mutex: every speaking path in this
+    file refuses to start while it returns a pid. That makes a `say` that
+    never exits a global, permanent mute — not just for the session that
+    started it, but for every session, plus the drainer, the watcher and
+    every click-to-talk read, none of which have any other way out.
+
+    And `say` does wedge. Retarget the default audio output mid-utterance
+    — answering a call is the everyday way, with Zoom/Teams/Slack all
+    installing virtual output devices — and it can be left parked in
+    CFRunLoopRun waiting on a completion callback that will never come:
+    alive, holding the mutex, consuming no CPU, forever. Nothing else in
+    this file reaps it (the lone SIGTERM in _silence_ask only covers a
+    question readout being closed), so the age check is the only thing
+    standing between one unlucky call and a silent day.
+    """
     try:
         with open(PID_FILE) as f:
             pid = int(f.read().strip())
     except (OSError, ValueError):
         return None
     try:
-        # pids get reused — only counts as busy if it's still a `say` process.
-        out = subprocess.run(["ps", "-p", str(pid), "-o", "comm="],
+        out = subprocess.run(["ps", "-p", str(pid), "-o", "etime=,command="],
                              capture_output=True, text=True).stdout.strip()
-        return pid if out.endswith("say") else None
     except OSError:
         return None
+    etime, _, command = out.partition(" ")
+    command = command.strip()
+    # pids get reused — only counts as busy if it's still a `say` process.
+    if not command.split(" ", 1)[0].endswith("say"):
+        return None
+    age = _etime_secs(etime)
+    if age is not None and age > _say_deadline(command):
+        # Wedged. SIGKILL rather than SIGTERM: the deadline has already
+        # established this process stopped making progress a long time
+        # ago, and a graceful stop is exactly the thing it can no longer
+        # do. Report the voice free either way — if the signal somehow
+        # does not land, staying mute forever is the worse failure.
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+        return None
+    return pid
 
 
 def enqueue(entry):
@@ -1444,14 +1537,7 @@ def speak_ask(rec):
     what = ", ".join(humanize(h) for h in headers[:4])
     text = f"{rec.get('name') or 'Claude'}: waiting on your call"
     text += f". {what}." if what else "."
-    proc = subprocess.Popen(say_argv(session_id, text),
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            start_new_session=True)
-    try:
-        with open(PID_FILE, "w") as f:
-            f.write(str(proc.pid))
-    except OSError:
-        pass
+    proc = start_say(session_id, text)
     _mark_ask_say(rec.get("tty"), rec.get("ts"), proc.pid)
 
 
@@ -1562,14 +1648,7 @@ def speak_ask_question(tty, rec, idx):
                 json.dump(latest, f)
         except OSError:
             pass
-    proc = subprocess.Popen(say_argv(rec.get("session"), lead + text),
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            start_new_session=True)
-    try:
-        with open(PID_FILE, "w") as f:
-            f.write(str(proc.pid))
-    except OSError:
-        pass
+    proc = start_say(rec.get("session"), lead + text)
     _mark_ask_say(tty, rec.get("ts"), proc.pid)
 
 
@@ -2055,14 +2134,11 @@ def speak_on_focus(tty, queued):
         return
     tint_stop(tty)
     badge("🔊 " + (window[0].get("name") or ""), window[0].get("session"))
-    proc = subprocess.Popen(say_argv(newest_session, text),
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            start_new_session=True)
-    try:
-        with open(PID_FILE, "w") as f:
-            f.write(str(proc.pid))
-    except OSError:
-        pass
+    # A call cutting this off returns the whole claimed set — window AND
+    # the entries it counted as skipped — to waiting, since the click that
+    # asked for them never actually got them.
+    proc = start_say(newest_session, text,
+                     ",".join(_unspeak_key(e) for e in queued))
     rgb = resolve_tab_color(window[0].get("session"))
     if tint_start(tty, window[0].get("term"), rgb, proc.pid):
         spawn_untinter(tty)
@@ -2162,6 +2238,102 @@ def spawn_watch():
                      start_new_session=True)
 
 
+def spawn_callguard(pid, unspeak=None):
+    """Detached: post a guard that cuts `pid` off if a call starts."""
+    argv = [sys.executable, os.path.abspath(__file__), "--callguard", str(pid)]
+    if unspeak:
+        argv += ["--unspeak", unspeak]
+    subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+
+
+def callguard(pid, unspeak=None):
+    """Cut the voice off the moment a call starts, and put what it was
+    saying back in the queue.
+
+    on_call() gates speech before it STARTS, but nothing used to watch for
+    a call answered mid-utterance — so the one thing `hold`/call-silence
+    promises ("mic or camera live and it says nothing at all") was exactly
+    what it did not do for the readout already in flight: it kept talking
+    into the meeting until the text ran out. Answering a Slack huddle
+    while a summary was being read is the everyday way to hit it.
+
+    Killing the voice is only half of it. A summary that arrives DURING a
+    call is held, tints the tab, and gets read when the call ends; one cut
+    off BY a call has to land in the same place, or "nothing is ever lost"
+    stops being true at precisely the moment you were interrupted. So the
+    queue entry it was reading goes back to unspoken and held="call", and
+    the existing machinery — the aging tint, the watcher's call-END edge —
+    delivers it afterwards like any other held summary. `unspeak` is
+    "<ts>:<session>", absent for question readouts, which have no queue
+    entry (the purple tab is already their record).
+
+    Self-limiting: the loop ends when the voice does.
+    """
+    while still_speaking(pid):
+        if on_call():
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+            if unspeak:
+                _unspeak_entries(unspeak)
+            return
+        time.sleep(CALLGUARD_POLL_SECS)
+
+
+def _unspeak_entries(spec):
+    """Return queue entries to the unspoken/held state a call interrupted
+    them into. `spec` is "<ts>:<session>" items joined by commas — one for
+    an ordinary summary, several for a backlog readout, which claims its
+    whole window up front and would otherwise mark the lot played on the
+    strength of a readout that got three words in. Session ids carry
+    neither separator, so the encoding is unambiguous.
+    """
+    keys = set()
+    for item in spec.split(","):
+        ts, _, session = item.partition(":")
+        try:
+            keys.add((int(ts), session))
+        except (TypeError, ValueError):
+            continue
+    if not keys:
+        return
+    entries = load_queue()
+    hit = False
+    for e in entries:
+        if (e.get("ts"), e.get("session") or "") in keys:
+            e["spoken"] = False
+            e["held"] = "call"
+            hit = True
+    if hit:
+        save_queue(entries)
+
+
+def _unspeak_key(entry):
+    """The `--unspeak` token for one queue entry."""
+    return f"{entry.get('ts')}:{entry.get('session') or ''}"
+
+
+def start_say(session_id, text, unspeak=None):
+    """Spawn `say`, claim the voice, and post the call guard.
+
+    Every readout in this file goes through here, so the guard is not
+    something a new speaking path can forget to opt into — the reason this
+    is a helper rather than three lines repeated at each site.
+    """
+    proc = subprocess.Popen(say_argv(session_id, text),
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
+    try:
+        with open(PID_FILE, "w") as f:
+            f.write(str(proc.pid))
+    except OSError:
+        pass
+    spawn_callguard(proc.pid, unspeak)
+    return proc
+
+
 def spawn_untinter(tty):
     """Detached: hold the tint until the voice stops, then restore."""
     subprocess.Popen([sys.executable, os.path.abspath(__file__), "--untint", tty],
@@ -2248,15 +2420,9 @@ def drain():
             return
         prefix = entry.get("name") or speak_name(entry.get("project") or "")
         badge("🔊 " + prefix, entry.get("session"))
-        proc = subprocess.Popen(
-            say_argv(entry.get("session"), f"{prefix}: {entry.get('text')}"),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True)
-        try:
-            with open(PID_FILE, "w") as f:
-                f.write(str(proc.pid))
-        except OSError:
-            pass
+        proc = start_say(entry.get("session"),
+                         f"{prefix}: {entry.get('text')}",
+                         _unspeak_key(entry))
         # Tint the terminal this summary came FROM (not this drainer's own,
         # which belongs to whichever session happened to spawn it).
         tty = entry.get("tty")
@@ -2371,14 +2537,8 @@ def main():
     # Name-prefixed on every path — immediate, drainer, /spoken-recap — so a
     # summary is always attributable to a terminal, contention or not.
     badge("🔊 " + entry["name"], session_id)
-    proc = subprocess.Popen(say_argv(session_id, f"{entry['name']}: {spoken}"),
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            start_new_session=True)
-    try:
-        with open(PID_FILE, "w") as f:
-            f.write(str(proc.pid))
-    except OSError:
-        pass
+    proc = start_say(session_id, f"{entry['name']}: {spoken}",
+                     _unspeak_key(entry))
     # Tint this terminal for the readout; a detached watcher restores it
     # when the voice stops, since the hook itself must return now.
     if tint_start(tty, term, rgb, proc.pid):
@@ -2412,6 +2572,10 @@ if __name__ == "__main__":
             drain()
         elif "--untint" in sys.argv:
             untint(sys.argv[sys.argv.index("--untint") + 1])
+        elif "--callguard" in sys.argv:
+            guarded = _arg("--callguard")
+            if guarded and guarded.isdigit():
+                callguard(int(guarded), _arg("--unspeak"))
         elif "--check-raise" in sys.argv:
             check_raise()
         elif "--repair" in sys.argv:

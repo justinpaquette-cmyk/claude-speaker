@@ -102,6 +102,8 @@ Only those exact strings are intercepted — *"repeat full coverage for the auth
 
 If your **microphone or camera is in use** — Zoom, Teams, FaceTime, a Meet tab, a screen recording — nothing plays at all, not even the chime. The summary just waits. A chime already deferred behind another readout re-checks at the moment it would actually play, so a call starting *during* the wait still silences it.
 
+**Answering a call mid-sentence stops the voice.** The check above gates speech before it *starts*, which left the one case it most needed to cover: a readout already in flight when you pick up. It used to keep talking into the meeting until the text ran out. Now a guard rides every readout and cuts it the moment the mic goes live — and what it was saying goes back to waiting, so an interrupted summary is held exactly like one that arrived during the call, tinting its tab and reading out afterwards. Being cut off is not the same as having heard it.
+
 **When the call ends, the tab you're sitting on reads out what it took during it.** A summary that landed while you sat still through a meeting has no focus transition to hang a read off — that's what leaves a tab tinted red with nothing coming — so the call ending is treated as a focus-in on wherever you are. Only on that tab: a meeting ending must never start a voice at a terminal across the desk. Everything held elsewhere keeps its tint and waits to be clicked into, exactly as before.
 
 Detection uses a tiny compiled helper (`scripts/av-status.c`) reading the same CoreAudio/CoreMediaIO signals behind the orange and green menu-bar dots, so it covers any app including browser-tab calls. It needs no mic or camera permission and never touches the devices. Not built (no Xcode Command Line Tools)? Speech simply always plays.
@@ -162,6 +164,8 @@ Everything is outside the model loop: no API calls, no tokens, no context impact
 Aging colors and click-to-read are handled by one locked watcher (`speak-response.py --watch`) that starts when something first has to wait and **exits as soon as the queue is clear** — nothing polls in the background during normal use. It asks the terminal app for its own frontmost tab, so it needs no Accessibility permission.
 
 Colors are Terminal.app tab backgrounds (AppleScript, matched by tty) or iTerm2 tab colors (OSC 6). Any other emulator skips the tint and still speaks. A terminal's real color is parked on disk and a tint is dropped **only once the repaint is confirmed**, so no crash or kill can strand a terminal in a color — `speak-response.py --repair` is the last resort if one ever does.
+
+Only one thing speaks at a time, and that turn-taking is enforced by a single lock: whichever `say` is running. That makes a `say` that never *finishes* everything's problem — and `say` can hang indefinitely inside CoreAudio if the audio device is retargeted mid-utterance, which is what answering a call on a headset does. So the lock is bounded by age as well as liveness: a `say` still holding it long after its own text could possibly have been read is treated as wedged, killed, and the voice handed on. The bound is five minutes *or* twice the utterance's estimated length, whichever is longer, so it can never truncate a real readout — it exists only to stop one stuck process from muting every session until you notice.
 
 ### The window-raise caveat
 
