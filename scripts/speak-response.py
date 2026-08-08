@@ -214,6 +214,21 @@ BADGE_HELPER = os.path.join(CLAUDE_DIR, "scripts", "speaking-badge")
 STAGE_EMOJI = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
 WATCH_POLL_SECS = 1.5
 WATCH_MAX_AGE_SECS = 86400  # forget pending entries older than a day
+# How often the watcher checks whether the terminals it is holding summaries
+# for still exist. A tab closing is not an event anything reports, so it has
+# to be noticed by looking; every 20 polls keeps the `ps` cost negligible
+# while capping how long a dead tab can be polled at half a minute.
+RETIRE_EVERY_POLLS = 20
+# A pending tint that will not paint is retried with this many polls between
+# attempts, doubling to the cap. Painting a tab can fail transiently
+# (osascript timeout, Terminal mid-redraw) and those retries must stay
+# quick — but it can also fail PERMANENTLY: a closed tab, an emulator
+# without AppleScript, a tab whose saved original reads back as one of our
+# own tints. Retried flat at the poll rate, a permanent failure is an
+# osascript every 1.5s for as long as the entry lives, each one walking
+# every window and tab of Terminal.app. Backing off makes the hopeless case
+# cost nothing without slowing the recoverable one down.
+TINT_RETRY_BACKOFF_MAX = 80  # polls (~2 min)
 # Every color this tool ever paints. Used to recognize a tab we stranded
 # (so we never save a tint as a tab's "original") and to repair one.
 TINTS = frozenset(tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
@@ -1870,6 +1885,100 @@ def save_queue(entries):
         return False
 
 
+_BOOT_TIME = []
+
+
+def boot_time():
+    """Unix seconds of the last boot, or None if it cannot be read.
+
+    A tty name only identifies a terminal WITHIN one boot: /dev/ttys006 is
+    handed out again from scratch after a restart, so an entry queued before
+    the last boot names a tab that no longer exists — and possibly a tab
+    that now belongs to an unrelated session.
+    """
+    if not _BOOT_TIME:
+        out = ""
+        try:
+            out = subprocess.run(["/usr/sbin/sysctl", "-n", "kern.boottime"],
+                                 capture_output=True, text=True,
+                                 timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            pass
+        m = re.search(r"sec\s*=\s*(\d+)", out)
+        _BOOT_TIME.append(int(m.group(1)) if m else None)
+    return _BOOT_TIME[0]
+
+
+def live_ttys():
+    """Every tty some process still holds as its controlling terminal, or
+    None when `ps` could not be asked.
+
+    A terminal tab always has at least its shell, so a tty missing here is
+    a tab that is gone. None means "cannot tell" and must never be read as
+    "nothing is alive".
+    """
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "tty="],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    names = {ln.strip() for ln in out.splitlines() if ln.strip()}
+    names.discard("??")  # no controlling terminal
+    return names
+
+
+def retire_dead(entries=None):
+    """Mark unspoken summaries whose terminal is gone as spoken, and return
+    how many were retired.
+
+    Delivery hangs entirely off a tty: a summary waits to be clicked into,
+    and a tab that no longer exists is never clicked into again. Left alone
+    such an entry sits in the queue for the full WATCH_MAX_AGE_SECS day,
+    which costs three separate things — the menu bar counts it ("7 waiting"
+    for summaries you can never reach, the count surviving a reboot because
+    nothing here ever looked at whether the terminal did), the watcher can
+    never reach its own exit condition and so polls around the clock, and
+    the pending tint it wants to paint can never land, so every poll fires
+    another osascript that walks every window and tab of Terminal.app.
+    Nothing reports a tab closing, so it has to be noticed by looking.
+
+    Retired, not deleted: `spoken` is what "no longer owed" means here, and
+    the text stays in the queue so /spoken-recap can still replay it.
+    """
+    entries = load_queue() if entries is None else entries
+    alive = live_ttys()
+    booted = boot_time()
+    if alive is None and booted is None:
+        return 0  # cannot prove anything is dead; leave the queue alone
+    dead, retired = set(), 0
+    for e in entries:
+        tty = e.get("tty")
+        if e.get("spoken") or not tty:
+            continue
+        # Either test alone leaves a hole: `ps` cannot tell that a live
+        # ttys006 is a REUSED ttys006, and the boot clock says nothing
+        # about a tab closed ten minutes ago.
+        if (booted is not None and e.get("ts", 0) < booted) or \
+                (alive is not None and os.path.basename(tty) not in alive):
+            e["spoken"] = True
+            e["retired"] = "terminal gone"
+            dead.add(tty)
+            retired += 1
+    if not dead or not save_queue(entries):
+        return 0
+    for tty in dead:
+        # The tint record outlives the tab too, and restore_stale() cannot
+        # clear it: repainting a tab that is gone always fails, so the
+        # record would be kept for a retry that can never succeed. There is
+        # nothing left to restore, and leaving it behind would hand a reused
+        # tty a stale "original" color to be put back to.
+        try:
+            os.remove(_tabcolor_path(tty))
+        except OSError:
+            pass
+    return retired
+
+
 def pending_by_tty(entries=None):
     """{tty: [unspoken entries, oldest first]} — what each terminal owes you."""
     cutoff = time.time() - WATCH_MAX_AGE_SECS
@@ -1953,7 +2062,19 @@ def watch():
     # and one that starts with the mic cold must not invent an edge on its
     # first poll and read at a terminal nobody asked.
     was_calling = on_call()
+    # Consecutive failed pending-paints per tty, and the poll each is next
+    # eligible to retry on. Watcher-local on purpose: a fresh watcher should
+    # start out willing to try every tab again.
+    paint_fails, paint_next = {}, {}
+    poll = 0
+    # Before the first poll, not just every RETIRE_EVERY_POLLS-th: a reboot
+    # is the case where EVERYTHING in the queue may be undeliverable, and
+    # the badge should never show a count from a previous boot even briefly.
+    retire_dead()
     while True:
+        poll += 1
+        if poll % RETIRE_EVERY_POLLS == 0:
+            retire_dead()
         entries = load_queue()
         waiting = pending_by_tty(entries)
         asking = live_asks()
@@ -2043,8 +2164,16 @@ def watch():
             if rec.get("state") == "speaking" and still_speaking(rec.get("pid")):
                 continue
             if rec.get("shown") != list(rgb):
-                tint_start(tty, queued[0].get("term") or term, rgb, None,
-                           state="pending")
+                if poll < paint_next.get(tty, 0):
+                    continue  # backing off from a paint that keeps failing
+                if tint_start(tty, queued[0].get("term") or term, rgb, None,
+                              state="pending"):
+                    paint_fails.pop(tty, None)
+                    paint_next.pop(tty, None)
+                else:
+                    n = paint_fails[tty] = paint_fails.get(tty, 0) + 1
+                    paint_next[tty] = poll + min(2 ** (n - 1),
+                                                 TINT_RETRY_BACKOFF_MAX)
         if focus != last_focus:
             # You just switched terminals. If you landed on one that is
             # holding something, it owes you a read — at ANY age. Clicking
