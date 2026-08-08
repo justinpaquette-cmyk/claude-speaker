@@ -248,14 +248,18 @@ changed = False
 def register(event, script, entry, matcher=None, label=None):
     """Add one hook, unless an equivalent one is already there.
 
-    Matched on the FULL command, not the script name: several hooks share
-    speak-response.py and differ only by flag (--ask-open, --ask-close), so
-    a name match would register the first and silently skip the rest.
+    Matched on the FULL command AND the matcher, not the script name:
+    several hooks share speak-response.py and differ only by flag
+    (--ask-open, --ask-close), so a name match would register the first
+    and silently skip the rest — and two of them differ only by matcher
+    (--ask-close closes an AskUserQuestion and an ExitPlanMode alike), so
+    a command-only match would register one tool's and skip the other's.
     """
     global changed
     groups = hooks.setdefault(event, [])
     name = label or script
     if any(h.get("command", "") == entry["command"]
+           and (group.get("matcher") or None) == (matcher or None)
            for group in groups for h in group.get("hooks", [])):
         print(f"{name} hook already registered — leaving it as it is")
         return
@@ -287,6 +291,17 @@ register("PostToolUse", "speak-response.py",
          {"type": "command", "command": cmd("speak-response.py") + " --ask-close",
           "timeout": 10},
          matcher="AskUserQuestion", label="ask-close")
+# A plan waiting for approval is the same state as an open question — the
+# session has stopped and the next move is yours — so it gets the same
+# purple tab and the same click-to-talk, and closes the same way.
+register("PreToolUse", "speak-response.py",
+         {"type": "command", "command": cmd("speak-response.py") + " --plan-open",
+          "timeout": 10},
+         matcher="ExitPlanMode", label="plan-open")
+register("PostToolUse", "speak-response.py",
+         {"type": "command", "command": cmd("speak-response.py") + " --ask-close",
+          "timeout": 10},
+         matcher="ExitPlanMode", label="plan-close")
 
 if changed:
     with open(path, "w") as f:

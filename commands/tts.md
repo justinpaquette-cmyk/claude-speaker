@@ -108,6 +108,30 @@ of waiting):
 - `/tts ask <color|off>` changes or kills the tint; `/tts ask-speak off` kills the
   speech in `chime` and `follow` too.
 
+**A plan waiting for approval speaks too** — `plan` (default `gist`). "Ready to
+code? Here is Claude's plan" is the same state as an open question: the session
+has stopped and the next move is yours. So it gets the same purple tab, the same
+click-to-talk, the same silence the moment you answer, and the same `ask_speak` /
+`focus_speak` / `hold` gates. What differs is length — a question is a sentence,
+a plan is pages:
+- Opening unfocused, the voice gives you the **title and the size** — *"probot: a
+  plan is waiting on your call. Finish 2026.3.1, build QA adjudication, scope the
+  permanent Probot. 8 steps."* Enough to decide whether to go look, which is all
+  an unprompted cue should ever be.
+- **Click in and it reads the plan's shape**: title, then every section heading —
+  *"probot has a plan. … 8 steps: Context; the provenance finding; Thread 1,
+  generalize customer-flagging; …"*. Capping the prose instead was tried and is
+  worse: a long plan's cap lands mid-context, so you'd hear two minutes of
+  preamble and never reach the steps you're being asked to approve. A plan
+  written as flat prose has no headings to read, and there the capped body *is*
+  the gist.
+- `/tts plan full` reads the **whole plan**, uncapped — for approving without
+  going to look. `/tts plan off` turns plan handling off entirely: no marker, no
+  purple, nothing spoken.
+- Picking option 4 ("tell Claude what to change") types over the prompt rather
+  than answering it, so nothing fires to close it — the same dismissal sweep that
+  covers a typed-over question clears the plan too.
+
 **Menu bar** — `menubar` (default `on`): the top bar shows `🔊 <terminal>` while
 something is speaking, or `🟡 2 waiting` when summaries are held. Needs the
 `speaking-badge` helper the installer builds.
@@ -165,6 +189,7 @@ Scope: **this session** by default; add `global` to set the default for all sess
 `/tts ask_follow <screen|click|off> [global]` — how the voice advances through a multi-question ask: follow the question on screen (default), advance one question per click-in, or first question only.
 `/tts ask_first <on|off> [global]` — read question one aloud the moment a set opens in the tab you're looking at, no click-in needed (default off).
 `/tts ask_context <on|off> [global]` — before the first question, speak the words Claude wrote right before asking — the why (default on; capped like a summary).
+`/tts plan <gist|full|off> [global]` — a plan waiting for approval: read its title and section headings on click-in (default gist), read the whole plan, or leave plans alone entirely.
 `/tts menubar <on|off> [global]` — menu-bar indicator.
 `/tts notify <on|off> [global]` — banner for summaries that had to wait.
 `/tts raise <window|off> [global]` — raise the speaking window (no focus steal).
@@ -189,7 +214,7 @@ python3 ~/.claude/scripts/speak-response.py --set <key> <value> [--session <id>]
    `ask-speak`→`ask_speak`, `focus`→`focus_speak`,
    `recap_max`/`recap-max`→`recap_max`, `ask_reads`/`ask-reads`→`ask_reads`,
    `ask_follow`/`ask-follow`→`ask_follow`, `ask_first`/`ask-first`→`ask_first`,
-   `ask_context`/`ask-context`→`ask_context`,
+   `ask_context`/`ask-context`→`ask_context`, `plan`→`plan`,
    `menubar`→`menubar`, `notify`→`notify`, `raise`→`raise`, `voice`→`voice`,
    `rate`→`rate`; anything else that is a valid mode (`off`/`summary`/`full`)
    means `mode`. No valid argument → skip to step 4 (report only). `name` is
