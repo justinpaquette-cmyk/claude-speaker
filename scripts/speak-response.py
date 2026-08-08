@@ -49,7 +49,8 @@ Visual cue (Terminal.app tab background via AppleScript, iTerm2 tab color
 via OSC 6; any other emulator just speaks). The terminal itself tells you
 what it wants:
   blue    - reading out right now
-  purple  - an AskUserQuestion is open: it is waiting on YOUR answer
+  purple  - an AskUserQuestion, or a plan awaiting approval (ExitPlanMode),
+            is open: it is waiting on YOUR answer
   green   - has a summary ready and waiting
   yellow  - has been waiting over 30s
   red     - has been waiting over 5min
@@ -68,6 +69,12 @@ otherwise a long turn would sit purple for its whole run and click-ins
 would re-read a dead question. Answering a question stops any readout of
 it still mid-sentence, and so does switching away from the tab — those are
 the two stop gestures.
+A plan waiting for approval (ExitPlanMode: "Ready to code?") is the same
+state and rides the same machinery — purple tab, click-to-talk, silence on
+answer — differing only in what is said, because a plan is pages where a
+question is a sentence: the unfocused cue gives its title and step count,
+and a click-in reads its outline (`plan`, default `gist`; `full` reads the
+whole plan, `off` ignores plans entirely).
 Focus a waiting terminal and it reads out on the spot, whatever its age,
 then goes back to its own color — the newest `recap_max` (3) of what it
 holds, oldest-first inside that window so the last thing you hear is the
@@ -208,6 +215,25 @@ ASK_FOLLOW_DEFAULT = "screen"
 # and never on fewer than ASK_NEEDLE_MIN, which would match on noise.
 ASK_NEEDLE_CHARS = 40
 ASK_NEEDLE_MIN = 12
+# A plan waiting for approval (ExitPlanMode) is the same STATE as an open
+# question — the session has stopped and the next move is yours — so it
+# shares all of it: the purple tab, the click-in read, the silence when
+# you answer. What differs is length. A question is a sentence; a plan is
+# pages, and reading pages aloud unprompted is not a cue, it is a
+# filibuster. So `gist` (the default) speaks the plan's SHAPE — its title
+# and its section headings — `full` reads the whole thing for when you
+# want to approve without looking, and `off` opts out of plan handling
+# entirely: no marker, no purple, exactly today's behavior.
+PLAN_READS = ("gist", "full", "off")
+PLAN_READ_DEFAULT = "gist"
+# The plan's opening line, spoken in the unfocused cue. Long enough for a
+# real plan title, short enough that the cue stays a cue.
+PLAN_TITLE_CHARS = 160
+# Section headings kept in the marker: the unfocused cue speaks only
+# their count ("8 steps"), the gist read speaks the headings themselves.
+# Generous, because the summary cap already bounds what is spoken — this
+# only stops a pathological plan from bloating the marker.
+PLAN_STEPS_KEPT = 40
 WATCH_LOCK = os.path.join(CLAUDE_DIR, "scripts", ".tts-watch.lock")
 BADGE_FILE = os.path.join(CLAUDE_DIR, "tts-badge.txt")
 BADGE_HELPER = os.path.join(CLAUDE_DIR, "scripts", "speaking-badge")
@@ -329,6 +355,11 @@ def resolve_ask_follow(session_id):
     """How the voice advances through a multi-question ask."""
     return resolve_setting(session_id, "ask_follow", ASK_FOLLOWS,
                            ASK_FOLLOW_DEFAULT)
+
+
+def resolve_plan_read(session_id):
+    """How much of a plan awaiting approval gets spoken. See PLAN_READS."""
+    return resolve_setting(session_id, "plan", PLAN_READS, PLAN_READ_DEFAULT)
 
 
 def resolve_voice(session_id):
@@ -499,13 +530,13 @@ def sanitize(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _trim(spoken, cap):
+def _trim(spoken, cap, tail=" — full response is in the terminal."):
     """Trim to `cap` chars at a word boundary, with a spoken 'see terminal' tail."""
     if not cap or len(spoken) <= cap:
         return spoken
     cut = spoken[:cap]
     sp = cut.rfind(" ")
-    return (cut[:sp] if sp > 0 else cut) + " — full response is in the terminal."
+    return (cut[:sp] if sp > 0 else cut) + tail
 
 
 def pick_speech(text, mode, cap):
@@ -992,7 +1023,7 @@ SETTABLE = {"mode": MODES, "collision": COLLISIONS, "chime": ("on", "off"),
             "ask_speak": ("on", "off"), "summary_chars": "int",
             "recap_max": "int", "ask_reads": "int",
             "ask_follow": ASK_FOLLOWS, "ask_first": ("on", "off"),
-            "ask_context": ("on", "off"),
+            "ask_context": ("on", "off"), "plan": PLAN_READS,
             "voice": "voice", "rate": "rate"}
 DEFAULTS = {"mode": "summary", "collision": "chime", "chime": "on",
             "focus_speak": "on", "menubar": "on", "notify": "on",
@@ -1001,6 +1032,7 @@ DEFAULTS = {"mode": "summary", "collision": "chime", "chime": "on",
             "summary_chars": "adaptive", "recap_max": RECAP_MAX_DEFAULT,
             "ask_reads": ASK_READS_DEFAULT, "ask_follow": ASK_FOLLOW_DEFAULT,
             "ask_first": "off", "ask_context": "on",
+            "plan": PLAN_READ_DEFAULT,
             "voice": "default", "rate": "default"}
 
 
@@ -1214,7 +1246,8 @@ def _ask_path(tty):
 
 
 def live_asks():
-    """{tty: marker} for every terminal with an AskUserQuestion still open.
+    """{tty: marker} for every terminal blocked on you — an open
+    AskUserQuestion, or a plan waiting for approval (kind "plan").
 
     A marker whose session process is gone (or that nothing closed for a
     day) is dropped here — that is what stops a killed session from
@@ -1395,6 +1428,124 @@ def ask_open(payload):
     spawn_watch()  # owns the focus transitions from here on
 
 
+def _plan_outline(plan):
+    """(title, steps, body) for a plan: its opening line, its section
+    headings, and the whole thing sanitized for speech.
+
+    Markdown headings AND bold-only lines both count as sections — plans
+    are written both ways, and the count is what the cue speaks. The
+    first heading (or, for a plan that opens in prose, the first line) is
+    the title and is deliberately NOT also a step: it names the plan, it
+    is not part of it.
+    """
+    bold = re.compile(r"\*\*(.+?)\*\*:?$")
+    title, steps = "", []
+    for raw in plan.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        m = re.match(r"^#{1,6}\s+(.*)", line) or bold.match(line)
+        heading = sanitize(m.group(1)) if m else ""
+        if not heading:
+            if not title:
+                title = sanitize(line)
+            continue
+        if not title:
+            title = heading
+        else:
+            steps.append(heading)
+    if len(title) > PLAN_TITLE_CHARS:
+        title = _trim(title, PLAN_TITLE_CHARS, tail="")
+    return title, steps, sanitize(plan)
+
+
+def _plan_speech(rec):
+    """What a plan readout actually says.
+
+    `full` reads the plan, all of it, uncapped — the mode for approving
+    without going to look. `gist` reads its SHAPE: the title, then the
+    section headings, because that is what you want in the ten seconds
+    after clicking into the tab. Capping the prose instead was the
+    obvious first cut and it is worse: a plan's adaptive cap lands
+    mid-context, so you hear two minutes of preamble and never reach the
+    steps you are being asked to approve.
+
+    A plan written as flat prose has no headings to read, and there the
+    capped body IS the gist — that fallback is the only place the cap
+    still applies.
+    """
+    body = str(rec.get("body") or "").strip()
+    if not body:
+        return ""
+    session_id = rec.get("session")
+    if resolve_plan_read(session_id) == "full":
+        return body  # deliberately uncapped, like mode full
+    steps = [s for s in (rec.get("steps") or []) if str(s).strip()]
+    title = str(rec.get("title") or "").strip()
+    if not steps:
+        return _trim(body, resolve_summary_cap(session_id, body),
+                     tail=" — the rest of the plan is in the terminal.")
+    text = f"{title}. " if title else ""
+    text += f"{len(steps)} step{'s' if len(steps) > 1 else ''}: "
+    text += "; ".join(str(s).strip().rstrip(".") for s in steps) + "."
+    # Cap taken from the PLAN's volume, not the outline's: the adaptive
+    # rule is "a bigger turn earns a longer readout", and a big plan with
+    # tight headings should get all of them, not a cap derived from how
+    # short its own outline happens to be.
+    return _trim(text, resolve_summary_cap(session_id, body),
+                 tail=" — the rest of the plan is in the terminal.")
+
+
+def plan_open(payload):
+    """ExitPlanMode fired: this terminal is blocked on you approving a plan.
+
+    Same marker, same purple, same click-to-talk as an open question,
+    because it is the same state — the session has stopped and the next
+    move is yours. It rides the ask machinery rather than copying it: one
+    "questions" entry holding the plan, so the heard-counting, the
+    silence-on-answer, the dismissal sweep and the tint all work
+    unchanged. Only the words differ (see speak_ask / speak_ask_question).
+
+    PreToolUse, so this blocks the approval prompt from rendering until it
+    returns: cheap part here, AppleScript and speech in a detached child.
+    """
+    session_id = payload.get("session_id") or ""
+    if resolve_plan_read(session_id) == "off":
+        return
+    tty, owner_pid = owning_tty_pid()
+    if not tty:
+        return
+    plan = str((payload.get("tool_input") or {}).get("plan") or "")
+    title, steps, body = _plan_outline(plan)
+    if not body:
+        return
+    project = os.path.basename(payload.get("cwd") or "") or "unknown"
+    name = session_name(session_id)
+    rec = {"tty": tty, "term": os.environ.get("TERM_PROGRAM") or "",
+           "session": session_id, "ts": int(time.time()),
+           "transcript": payload.get("transcript_path") or "",
+           "owner_pid": owner_pid, "project": project, "kind": "plan",
+           "title": title, "steps": steps[:PLAN_STEPS_KEPT], "body": body,
+           "headers": [],
+           # The one "question" here is the plan itself. Its text is only
+           # ever a placeholder — every read goes through _plan_speech() —
+           # but it has to be non-empty, because an empty question set is
+           # how speak_ask_on_focus() recognizes a marker it cannot read.
+           "questions": [{"q": title or "the plan", "options": []}],
+           "name": humanize(name) if name else speak_name(project)}
+    try:
+        os.makedirs(ASKING_DIR, exist_ok=True)
+        with open(_ask_path(tty), "w") as f:
+            json.dump(rec, f)
+    except OSError:
+        return
+    subprocess.Popen([sys.executable, os.path.abspath(__file__),
+                      "--ask-announce", tty],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    spawn_watch()  # owns the focus transitions from here on
+
+
 def _ask_preamble(transcript, first_q):
     """Text of the assistant message holding this ask's tool_use, or None
     while that message has not reached the transcript yet ("" once it is
@@ -1445,6 +1596,11 @@ def _ask_context(rec):
     Empty when the ask arrived with no preamble, or `ask_context` is off.
     """
     session_id = rec.get("session")
+    if rec.get("kind") == "plan":
+        # A plan needs no "why" harvested from the message before it: in
+        # plan mode there is rarely any such message, and the plan is the
+        # context. (It also has no AskUserQuestion tool_use to match on.)
+        return ""
     if resolve_setting(session_id, "ask_context", ("on", "off"), "on") == "off":
         return ""
     transcript = rec.get("transcript") or ""
@@ -1548,9 +1704,25 @@ def speak_ask(rec):
         return
     if on_call() or active_say_pid() is not None:
         return
+    name = rec.get("name") or "Claude"
+    if rec.get("kind") == "plan":
+        # Title and size, not the plan: this fires unprompted at a tab you
+        # are not looking at, and the whole point of the cue is deciding
+        # whether to go look. The plan itself is a click away.
+        text = f"{name}: a plan is waiting on your call"
+        title = str(rec.get("title") or "").strip()
+        if title:
+            text += f". {title}"
+        n = len(rec.get("steps") or [])
+        if n:
+            text += f". {n} step{'s' if n > 1 else ''}"
+        text += "."
+        proc = start_say(rec.get("session"), text)
+        _mark_ask_say(rec.get("tty"), rec.get("ts"), proc.pid)
+        return
     headers = rec.get("headers") or []
     what = ", ".join(humanize(h) for h in headers[:4])
-    text = f"{rec.get('name') or 'Claude'}: waiting on your call"
+    text = f"{name}: waiting on your call"
     text += f". {what}." if what else "."
     proc = start_say(session_id, text)
     _mark_ask_say(rec.get("tty"), rec.get("ts"), proc.pid)
@@ -1613,7 +1785,8 @@ def speak_ask_question(tty, rec, idx):
     — and log it as heard in the marker. The name intro and the "plus two
     more" count ride only the set's first read; later questions lead with
     their number, so advancing sounds like advancing, not like a new
-    session piping up.
+    session piping up. A plan marker takes the branch below instead: one
+    item, no options, `plan gist`/`full` deciding how much of it is read.
 
     The heard-claim is written before the speech starts. The watcher is
     the only writer of this field, so no locking — but re-read anyway and
@@ -1622,6 +1795,18 @@ def speak_ask_question(tty, rec, idx):
     """
     questions = rec.get("questions") or []
     if not (0 <= idx < len(questions)) or not isinstance(questions[idx], dict):
+        return
+    heard = rec.get("heard") or {}
+    if rec.get("kind") == "plan":
+        # A plan is one item, so there is no question numbering to do and
+        # no options to read — the choices under a plan are always the
+        # same four, and "yes, and bypass permissions" is not news.
+        text = _plan_speech(rec)
+        if not text:
+            return
+        lead = ("The plan again. " if any(heard.values())
+                else f"{rec.get('name') or 'Claude'} has a plan. ")
+        _speak_ask_text(tty, rec, idx, lead, text)
         return
     text = str(questions[idx].get("q") or "").strip()
     if not text:
@@ -1632,7 +1817,6 @@ def speak_ask_question(tty, rec, idx):
                if str(o).strip()]
     if options:
         text += " Options: " + "; ".join(options) + "."
-    heard = rec.get("heard") or {}
     if any(heard.values()):
         lead = f"Question {idx + 1}. "
     else:
@@ -1648,6 +1832,13 @@ def speak_ask_question(tty, rec, idx):
         more = len(questions) - idx - 1
         if more:
             text += f" Plus {more} more question{'s' if more > 1 else ''}."
+    _speak_ask_text(tty, rec, idx, lead, text)
+
+
+def _speak_ask_text(tty, rec, idx, lead, text):
+    """Claim item `idx` as heard, then say it. Shared by the question and
+    plan readouts because the bookkeeping is what makes either of them
+    stop repeating itself — only the words above differ."""
     try:
         with open(_ask_path(tty)) as f:
             latest = json.load(f)
@@ -1706,6 +1897,11 @@ def ask_screen_follow(tty, rec, owed):
     miss), which hands the click-in to speak_ask_on_focus().
     """
     if not _ask_gates_open(rec.get("session")):
+        return False
+    if rec.get("kind") == "plan":
+        # Nothing to follow: a plan is a single item, and its spoken form
+        # is stripped markdown that would never match the rendered screen
+        # anyway. The click-in path reads it instead.
         return False
     idx = displayed_question(tty, rec)
     if idx is None:
@@ -2692,10 +2888,17 @@ if __name__ == "__main__":
                 ask_open(json.load(sys.stdin))
             except (json.JSONDecodeError, ValueError):
                 pass
+        elif "--plan-open" in sys.argv:
+            # PreToolUse[ExitPlanMode]: a plan is waiting for your approval.
+            try:
+                plan_open(json.load(sys.stdin))
+            except (json.JSONDecodeError, ValueError):
+                pass
         elif "--ask-announce" in sys.argv:
             ask_announce(sys.argv[sys.argv.index("--ask-announce") + 1])
         elif "--ask-close" in sys.argv:
-            # PostToolUse[AskUserQuestion]: answered — drop marker and tint.
+            # PostToolUse[AskUserQuestion|ExitPlanMode]: answered — drop
+            # marker and tint. A plan closes exactly like a question does.
             ask_clear(owning_tty())
         elif "--drain" in sys.argv:
             drain()
